@@ -1,0 +1,3 @@
+[submodule "lstm"]
+	path = lstm
+	url = git@github.com:antolu/awd-lstm-lm.git
