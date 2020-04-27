@@ -1,12 +1,63 @@
-import torch.utils.data as data
 from os import path, listdir
 from sys import exit
-import torch
-from tqdm import tqdm
 import re
+
+import torch
+import torch.utils.data as data
+from tqdm import tqdm
 
 import logging
 log = logging.getLogger('log')
+
+
+def read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')):
+    split = path.splitext(path.basename(filepath))[0]
+    data = list()
+
+    n_tokens = 0
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            line = re.sub(regex, '', line)
+            tokens = line.split(' ') + ['<']  # < is EOS
+
+            n_tokens += len(tokens)
+            data.append(tokens)
+
+    return split, data, n_tokens
+
+
+def process_language_data(filepath, processor, language):
+
+    split, split_data, n_tokens = read_raw_data(filepath)
+
+    dataset = Dataset(split, language)
+    tensor = torch.zeros(n_tokens)
+    i = 0
+
+    # Create tensor for each line in data file.
+    for line in split_data:
+        for char in line:
+            processor(char, i, tensor)
+            i += 1
+
+    dataset.data = tensor
+
+    return split, dataset
+
+
+def check_dir(dir: str):
+    """
+    Checks if data directories exists. Will exit with code 1 if they do not.
+    :return: None
+    """
+    if not path.exists(dir):
+        log.error('Path {} does not exist'.format(dir))
+        exit(1)
+    if not path.isdir(dir):
+        log.error('{} is not a directory'.format(dir))
+        exit(1)
+
 
 class DataLoader():
     def __init__(self, datadir='dataset', dataset='latin'):
@@ -20,8 +71,8 @@ class DataLoader():
         self.character_to_idx = dict()
         self.idx_to_character = list()
 
-        # This dict contains all the available datasets in tensor form.
-        self.datasets = dict()
+        self.idx_counter = 0
+        self.n_tokens = 0
 
         # self.mapping_exists = False
 
@@ -31,7 +82,7 @@ class DataLoader():
         :return: None
         """
 
-        self.check_dirs()
+        check_dir(self.datadir)
 
         mapping_exists = self.mapping_exists()
 
@@ -42,88 +93,16 @@ class DataLoader():
             log.info('Mapping exists. Using cached file. ')
             self.load_mapping()
 
-        self.read_raw_data()
-
         self.process_data()
 
         if not mapping_exists:
             self.write_mapping(mapping_filename)
 
-    def load_mapping(self):
-        """
-        Read the character mapping file from file and saves the mapping in dictionaries.
-        :return: The path to the mapping file.
-        """
-        mapping_file = path.join(self.datadir, self.character_mappings_name)
+    def process_data(self):
 
-        with open(mapping_file, 'r') as f:
-
-            for line in f:
-                contents = line.split(' ')
-                self.character_to_idx[contents[0]] = contents[1]
-                self.idx_to_character.append(contents[0])
-
-        log.info('Processed mapping file {}.'.format(mapping_file))
-
-        return mapping_file
-
-    def mapping_exists(self):
-        """
-        Determines whether a character mapping already exists.
-        :return: Boolean whether the mapping exists.
-        """
-        mapping_file = path.join(self.datadir, self.character_mappings_name)
-
-        return path.exists(mapping_file)
-
-    def check_dirs(self):
-        """
-        Checks if data directories exists. Will exit with code 1 if they do not.
-        :return: None
-        """
-        if not path.exists(self.datadir):
-            log.error('Path {} does not exist'.format(self.datadir))
-            exit(1)
-        if not path.isdir(self.datadir):
-            log.error('{} is not a directory'.format(self.datadir))
-            exit(1)
-
-    def read_raw_data(self):
-        """
-        Reads the raw data into memory and saves the data in string form in dictionaries for further processing
-        :return: None
-        """
-        log.info('Reading in data from file.')
         datadir = path.join(self.datadir, 'bibles_{}'.format(self.dataset))
 
-        languages = listdir(datadir)
-        for language in tqdm(languages):
-            log.debug('Processing language {}.'.format(language))
-            self.data[language] = dict()
-
-            language_data = self.data[language]
-            for file in listdir(path.join(datadir, language)):
-                key = path.splitext(path.basename(file))[0]
-                value = list()
-                log.debug('Processing language and split {}/{}.'.format(language, key))
-
-                with open(path.join(datadir, language, file), 'r') as f:
-                    for line in f:
-                        value.append(line.strip())
-
-                language_data[key] = value
-
-    def process_data(self):
-        """
-        Processes the raw data in memory into PyTorch tensors, will also create character mapping
-        if it does not already exists.
-        :return: None
-        """
         log.info('Creating data tensors. {}'.format('Creating mapping too.' if self.mapping_exists else ''))
-
-        idx_counter = 0
-
-        regex = re.compile(r'[^\w\s\_\-\?\!\:\,\.]')
 
         def add_to_tensor(char : str, idx: int, tensor: torch.Tensor):
             """
@@ -133,9 +112,9 @@ class DataLoader():
             :param tensor: The tensor which to add the character to
             :return: None
             """
-            tensor[idx, 0] = self.character_to_idx[char]
+            tensor[idx] = self.character_to_idx[char]
 
-        def add_to_index(char : str, idx: int, tensor: torch.Tensor):
+        def add_to_index(char: str, idx: int, tensor: torch.Tensor):
             """
             Helper function to create character mapping. If character does not exist in index, map it and continue to
             create PyTorch tensor.
@@ -144,53 +123,32 @@ class DataLoader():
             :param tensor: The tensor which to add the character to.
             :return: None
             """
-            nonlocal idx_counter
 
             if char not in self.character_to_idx:
-                self.character_to_idx[char] = idx_counter
-                idx_counter += 1
-            else:
-                return
+                self.character_to_idx[char] = self.idx_counter
+                self.idx_counter += 1
 
             add_to_tensor(char, idx, tensor)
 
         # Speeds up computations significantly instead of running if/else statements for each iteration.
-        if self.mapping_exists():
-            process = add_to_tensor
-        else:
-            process = add_to_index
+        processor = add_to_tensor if self.mapping_exists() else add_to_index
 
-        # only for tqdm progress bar
-        total = 0
-        for _, l in self.data.items():
-            total += len(l)
+        languages = listdir(datadir)
+        pbar = tqdm(languages)
+        for language in pbar:
+            log.debug('Processing language and split {}.'.format(language))
+            pbar.set_description('Processing language and split {}'.format(language))
+            self.data[language] = dict()
+            for split in listdir(path.join(datadir, language)):
+                filepath = path.join(datadir, language, split)
+                name, dataset = process_language_data(filepath, processor, language)
 
-        with tqdm(total=total) as pbar:
-            for language, language_d in self.data.items():
-                self.datasets[language] = dict()
+                self.data[language][name] = dataset
 
-                for split, split_data in language_d.items():
-                    log.debug('Processing language and split {}/{}'.format(language, split))
-                    pbar.set_description('Processing language and split {}/{}'.format(language, split))
-                    dataset = Dataset(split, language)
+        for char in self.character_to_idx:
+            self.idx_to_character.append(char)
 
-                    # Create tensor for each line in data file.
-                    for line in split_data:
-                        # Remove all characters except for alphanumeric, punctuation and space
-                        line = re.sub(regex, '', line)
-
-                        line = line.split(' ')
-                        tensor = torch.zeros([len(line), 1])
-                        for i in range(len(line)):
-                            process(line[i], i, tensor)
-
-                        dataset.data.append(tensor)
-                        pbar.update(1)
-
-                    self.datasets[language][split] = dataset
-
-        for ch, idx in self.character_to_idx.items():
-            self.idx_to_character.append(ch)
+        self.n_tokens = self.idx_counter
 
     def write_mapping(self, mapping_file: str):
         """
@@ -226,7 +184,37 @@ class DataLoader():
 
             return output
 
-        return self.datasets[language][split]
+        return self.data[language][split]
+
+    def load_mapping(self):
+        """
+        Read the character mapping file from file and saves the mapping in dictionaries.
+        :return: The path to the mapping file.
+        """
+        mapping_file = path.join(self.datadir, self.character_mappings_name)
+
+        with open(mapping_file, 'r') as f:
+
+            for line in f:
+                contents = line.split(' ')
+                self.character_to_idx[contents[0]] = int(contents[1])
+                self.idx_to_character.append(int(contents[1]))
+
+        log.info('Processed mapping file {}.'.format(mapping_file))
+
+        return mapping_file
+
+    def mapping_exists(self):
+        """
+        Determines whether a character mapping already exists.
+        :return: Boolean whether the mapping exists.
+        """
+        mapping_file = path.join(self.datadir, self.character_mappings_name)
+
+        return path.exists(mapping_file)
+
+    def __len__(self):
+        return len(self.data)
 
 
 class Dataset(data.Dataset):
@@ -238,7 +226,7 @@ class Dataset(data.Dataset):
         """
         self.split = split
         self.language = language
-        self.data = list()
+        self.data = None
 
     def __len__(self):
         return len(self.data)
