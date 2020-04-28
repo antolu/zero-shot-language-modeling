@@ -13,8 +13,8 @@ def get_args():
                         help='Path to project data')
     parser.add_argument('--pretrained-model', dest='pretrained_model', default=None,
                         help='path to pretrained-model')
-    parser.add_argument('--remap', action='store_true', help='Redo character mappings')
-
+    parser.add_argument('--remap', action='store_true', help='Redo character mappings.')
+    parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
 
     # Arguments concerning training and testing the model
     traintest = parser.add_mutually_exclusive_group(required=True)
@@ -26,8 +26,9 @@ def get_args():
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
                         help="The learning rate for the Adam optimiser.")
-    parser.add_argument("--batchsize", type=int, default=256,
+    parser.add_argument("--batchsize", type=int, default=80,
                         help="The batchsize to use in training")
+    parser.add_argument('--embedding-size', type=int, default=400, help='The size of the embedding.')
     parser.add_argument("--eps", type=float, default=1e-4,
                         help="The difference between losses between iterations \
                         to break.")

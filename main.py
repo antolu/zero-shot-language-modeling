@@ -31,29 +31,25 @@ log.addHandler(ch)
 def main():
     args = get_args()
 
-    loader = DataLoader(args.datadir)
-    loader.load()
+    loader = DataLoader(args.datadir, args.dataset)
+    loader.load(args.remap, args.rebuild)
+    loader.make_batches(128)
 
     n_token = len(loader.idx_to_character)
 
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-
-    # if args.train:
-    #     train_set = loader.get_split('train', 'eng')
-    #     val_set = loader.get_split('valid', 'eng')
-    # elif args.test:
-    #     test_split = loader.get_split('test', 'eng')
-    # else:
-    #     raise NotImplementedError("Invalid options specified.")
-
-    return
 
     # model = LSTM(400, n_hidden=1150, n_layers=3)
     model = RNNModel('LSTM', ntoken=n_token, nhid=1150, ninp=400, nlayers=3).to(device)
 
     optimizer = Adam(model.parameters(), lr=1e-4)
 
-    loss_function = nn.NLLLoss()
+    loss_function = nn.CrossEntropyLoss()
+
+    eval_batchsize = 10
+    test_batchsize = 1
+
+    return
 
 
     # TODO: implement universal prior
@@ -63,6 +59,8 @@ def main():
 
     trainer = create_supervised_trainer(model, optimizer, loss_function)
     evaluator = create_supervised_evaluator(model, metrics={'loss' : nn.NLLLoss()})
+
+    # @trainer.on(Events.EPOCH_STARTED)
 
     @trainer.on(Events.ITERATION_COMPLETED)
     def validate(trainer):
