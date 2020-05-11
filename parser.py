@@ -29,6 +29,12 @@ def get_args():
     parser.add_argument('--bptt', type=float, default=125)
     parser.add_argument("--batchsize", '--train-batchsize', type=int, default=128,
                         help="The batchsize to use in training")
+    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout applied to layers')
+    parser.add_argument('--dropouti', type=float, default=0, help='Dropout for input embedding layers')
+    parser.add_argument('--dropouth', type=float, default=0.1, help='Dropout for rnn layers')
+    parser.add_argument('--dropoute', type=float, default=0.1, help='Dropout to remove words from embedding layer')
+    parser.add_argument('--wdrop', type=float, default=0.2,
+                        help='Amount of weight dropout to apply to the RNN hidden to hidden matrix')
     parser.add_argument('--valid-batchsize', type=int, default=10, dest='valid_batchsize')
     parser.add_argument('--test-batchsize', type=int, default=1, dest='test_batchsize')
     parser.add_argument('--embedding-size', type=int, default=400, help='The size of the embedding.')

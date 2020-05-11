@@ -12,6 +12,8 @@ class DotDict(dict):
         for arg in args:
             if isinstance(arg, dict):
                 for k, v in arg.items():
+                    if isinstance(v, dict):
+                        v = DotDict(v)
                     self[k] = v
 
         if kwargs:
@@ -44,3 +46,10 @@ def save_model(filename: str, data):
 def load_model(filename):
     with open(filename, 'rb') as f:
         return torch.load(f)
+
+
+def detach(data):
+    if isinstance(data, torch.Tensor):
+        return data.detach()
+    elif isinstance(data, tuple) or isinstance(data, list):
+        return tuple(detach(d) for d in data)

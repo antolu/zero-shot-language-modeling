@@ -3,6 +3,7 @@
 import logging
 import math
 import sys
+import traceback
 from datetime import datetime
 from os import path
 
@@ -13,7 +14,7 @@ from torch.distributions.normal import Normal
 
 from data import Data, DataLoader, get_sampling_probabilities
 from parser import get_args
-from utils import save_model
+from utils import save_model, load_model, detach
 
 sys.path.insert(0, 'lstm')
 
@@ -36,7 +37,7 @@ log.addHandler(ch)
 def main():
     args = get_args()
 
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     log.info('Using device {}.'.format(device))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
@@ -57,7 +58,14 @@ def main():
     n_token = len(data.idx_to_character)
 
     # model = LSTM(400, n_hidden=1150, n_layers=3)
-    model = RNNModel('LSTM', ntoken=n_token, nhid=1840, ninp=400, nlayers=3, wdrop=0.2).to(device)
+    model = RNNModel('LSTM', ntoken=n_token, nhid=1840, ninp=400, nlayers=3, dropout=args.dropout,
+                     dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop)
+    # model = model.to(device)
+
+    # backwards combatibility
+    if torch.cuda.is_available():
+        model = model.cuda()
+
     optimizer = Adam(model.parameters(), lr=1e-4)
     loss_function = nn.CrossEntropyLoss().to(device)
     params = list(model.parameters()) + list(loss_function.parameters())
@@ -83,7 +91,7 @@ def main():
                 output, hidden = model(data, hidden)
                 loss = loss_function(output, targets)
                 total_loss += len(data) * loss.data
-                hidden = hidden.detach()
+                hidden = detach(hidden)
 
                 batch += 1
 
@@ -91,7 +99,7 @@ def main():
 
         dataloader.reset()
 
-        return total_loss / len(dataloader)
+        return total_loss / args.test_batchsize
 
     def train(dataloader: DataLoader):
         total_loss = 0
@@ -109,7 +117,7 @@ def main():
                 optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
 
                 model.train()
-                hidden = hidden.detach()
+                hidden = detach(hidden)
                 optimizer.zero_grad()
 
                 output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, return_h=True)
@@ -183,6 +191,7 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             pass
         finally:
+            log.exception('Possible stack trace: ')
             log.info('Saving last model to disk')
             save_model(path.join(args.dir_model, '{}_epoch{}.pth'.format(timestamp, epoch)),
                        (model, loss_function, optimizer))

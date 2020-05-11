@@ -113,7 +113,7 @@ class Data:
 
         self.n_tokens = self.idx_counter
 
-    def get_dataloader(self, split, batchsize, seq_len, language_probabilities):
+    # def get_dataloader(self, split, batchsize, seq_len, language_probabilities):
 
     def __get_tqdm_iterator(self):
         datadir = path.join(self.datadir, 'bibles_{}'.format(self.dataset))
@@ -139,11 +139,11 @@ class Data:
         """
 
         if language == 'all':
-            output = {lan: splits[split] if split in splits else None for lan, splits in self.data}
+            output = {lan: splits[split].data if split in splits else None for lan, splits in self.data.items()}
 
             return output
 
-        return {language: self.data[language][split]}
+        return {language: self.data[language][split].data}
 
     def load_mapping(self):
         """
@@ -229,10 +229,12 @@ class DataLoader:
                 self.idx_to_language.append(language)
 
         # Used for eval
-        self.language_iter = iter(idx_to_language)
+        self.language_iter = iter(self.idx_to_language)
         self.current_language = next(self.language_iter)
 
         self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
+
+        self.__make_batches()
 
     def __make_batches(self):
         dataset = dict()
@@ -261,8 +263,8 @@ class DataLoader:
         else:
             language = self.__get_language()
 
-        seq_len = max(200, int(self.seq_len.sample()))
-        data, target = get_batch(self.data[language], seq_len, self.seq_tracking[language].idx, device=self.device)
+        seq_len = min(200, int(self.seq_len.sample()))
+        data, target = get_batch(self.data[language], seq_len, self.seq_tracking[language], device=self.device)
 
         if self.eval:
             return data, target
@@ -278,7 +280,7 @@ class DataLoader:
         return self.total_iters
 
     def is_exhausted(self):
-        return all([d.exhausted for _, d in self.seq_tracking.items()])
+        return all([d['exhausted'] for _, d in self.seq_tracking.items()])
 
     def __len__(self):
         # TODO: This needs to be implemented
@@ -321,7 +323,7 @@ def process_language_data(filepath, processor, language) -> (str, Dataset):
     split, split_data, n_tokens = read_raw_data(filepath)
 
     dataset = Dataset(split, language)
-    tensor = torch.zeros(n_tokens)
+    tensor = torch.zeros(n_tokens, dtype=torch.long)
     i = 0
 
     # Create tensor for each line in data file.
@@ -369,7 +371,7 @@ def batchify(data: torch.Tensor, batchsize: int):
     return data
 
 
-def get_batch(source: torch.Tensor, seq_len: int, tracking: DotDict, device='cpu'):
+def get_batch(source: torch.Tensor, seq_len: int, tracking: dict, device='cpu'):
     # If we're out of data, take only what we can
     seq_len = min(seq_len, len(source) - 1 - tracking.idx)
 
