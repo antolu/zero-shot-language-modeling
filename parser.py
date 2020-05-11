@@ -26,8 +26,11 @@ def get_args():
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
                         help="The learning rate for the Adam optimiser.")
-    parser.add_argument("--batchsize", type=int, default=80,
+    parser.add_argument('--bptt', type=float, default=125)
+    parser.add_argument("--batchsize", '--train-batchsize', type=int, default=128,
                         help="The batchsize to use in training")
+    parser.add_argument('--valid-batchsize', type=int, default=10, dest='valid_batchsize')
+    parser.add_argument('--test-batchsize', type=int, default=1, dest='test_batchsize')
     parser.add_argument('--embedding-size', type=int, default=400, help='The size of the embedding.')
     parser.add_argument("--eps", type=float, default=1e-4,
                         help="The difference between losses between iterations \
@@ -36,20 +39,15 @@ def get_args():
                         help="Whether to use FP16 or FP32 in training.")
     parser.add_argument("--opt-level", dest="opt_level", type=str, default="O1",
                         help="Which optimisation to use for mixed precision training.")
-    parser.add_argument("--eval-metric", type=str, dest="eval_metric", default="accuracy", choices=["accuracy", "attention"])
+    parser.add_argument("--eval-metric", type=str, dest="eval_metric", default="accuracy",
+                        choices=["accuracy", "attention"])
 
     parser.add_argument('--workers', default=8, type=int,
                         help="Number of workers for training the network")
     parser.add_argument('--resume', default=False, type=bool)
     parser.add_argument('--start-epoch', default=0, type=int, dest="start_epoch",
                         help="The epoch to start/resume training at")
-    parser.add_argument('--patience', default=3, type=int)
-
-
-    # Other arguments
-    #parser.add_argument("baseline", type=str, default='oest', choices=["oest", "bare"],
-    #:W
-    # help="Valid baseline net")
+    parser.add_argument('--patience', default=1, type=int)
 
     args = parser.parse_args()
 

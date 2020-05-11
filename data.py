@@ -1,17 +1,20 @@
-from os import path, listdir
-from sys import exit
+import logging
 import re
 from glob import glob
+from os import path, listdir
+from sys import exit
 
 import torch
+from torch.distributions.categorical import Categorical
 from torch.utils.data import Dataset as torch_Dataset
 from tqdm import tqdm
 
-import logging
+from utils import DotDict
+
 log = logging.getLogger('log')
 
 
-class DataLoader:
+class Data:
     def __init__(self, datadir='dataset', dataset='latin'):
         # This dictionary contains all the available datasets in raw string form.
         self.data = dict()
@@ -52,7 +55,8 @@ class DataLoader:
         :return: None
         """
 
-        log.info('{} {}'.format('Creating data tensors.' if not load_data else 'Loading data tensor.', 'Creating mapping too.' if self.mapping_exists and not load_data else ''))
+        log.info('{} {}'.format('Creating data tensors.' if not load_data else 'Loading data tensor.',
+                                'Creating mapping too.' if self.mapping_exists and not load_data else ''))
 
         def add_to_tensor(char: str, idx: int, tensor: torch.Tensor):
             """
@@ -83,7 +87,7 @@ class DataLoader:
         # Speeds up computations significantly instead of running if/else statements for each iteration.
         processor = add_to_tensor if self.mapping_exists() else add_to_index
 
-        languages, datadir, pbar = self.get_tqdm_iterator()
+        languages, datadir, pbar = self.__get_tqdm_iterator()
         for language in pbar:
             self.data[language] = dict()
 
@@ -109,20 +113,9 @@ class DataLoader:
 
         self.n_tokens = self.idx_counter
 
-    def make_batches(self, batchsize, device='cpu', languages=None, split=None, fuzzy=True):
-        if languages is None:
-            log.info("Processing all datasets into batches.")
-            languages = self.data.keys()
-        else:
-            log.info("Processing languages {} into batches.".format(', '.join(languages)))
+    def get_dataloader(self, split, batchsize, seq_len, language_probabilities):
 
-        for language in languages:
-            for split_name in self.data[language]:
-                if split is None or split == split_name or (split in split_name and fuzzy):
-                    dataset = self.data[language][split_name]
-                    dataset.data = batchify(dataset.data, batchsize).to(device)
-
-    def get_tqdm_iterator(self):
+    def __get_tqdm_iterator(self):
         datadir = path.join(self.datadir, 'bibles_{}'.format(self.dataset))
 
         languages = listdir(datadir)
@@ -146,15 +139,11 @@ class DataLoader:
         """
 
         if language == 'all':
-            output = list()
-
-            for lan, splits in self.data:
-                if split in splits:
-                    output.append(splits[split])
+            output = {lan: splits[split] if split in splits else None for lan, splits in self.data}
 
             return output
 
-        return self.data[language][split]
+        return {language: self.data[language][split]}
 
     def load_mapping(self):
         """
@@ -164,7 +153,6 @@ class DataLoader:
         mapping_file = path.join(self.datadir, self.character_mappings_name)
 
         with open(mapping_file, 'r') as f:
-
             for line in f:
                 contents = line.split(' ')
                 self.character_to_idx[contents[0]] = int(contents[1])
@@ -215,7 +203,89 @@ class Dataset(torch_Dataset):
         return self.data[item]
 
 
-def read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')):
+class Constant:
+    def __init__(self, constant: int):
+        self.constant = constant
+
+    def sample(self):
+        return self.constant
+
+
+class DataLoader:
+    def __init__(self, data: dict, batchsize: int, seq_len=125, lang_sampler=None, idx_to_language=None,
+                 device: str = 'cpu', oversample: bool = True, eval: bool = True):
+        self.eval = eval
+        self.data = data
+        self.seq_len = Constant(seq_len) if isinstance(seq_len, int) else seq_len
+        self.lang_sampler = get_sampling_probabilities(self.data, 1.0) if lang_sampler is None else lang_sampler
+        self.batchsize = batchsize
+        self.device = device
+        self.oversample = oversample
+        self.total_iters = None
+
+        if idx_to_language is None:
+            self.idx_to_language = list()
+            for language in self.data:
+                self.idx_to_language.append(language)
+
+        # Used for eval
+        self.language_iter = iter(idx_to_language)
+        self.current_language = next(self.language_iter)
+
+        self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
+
+    def __make_batches(self):
+        dataset = dict()
+        for language, data in self.data.items():
+            dataset[language] = batchify(data, self.batchsize)
+        self.data = dataset
+
+    def __get_language(self):
+        language_idx = self.lang_sampler.sample()
+        language = self.idx_to_language[language_idx]
+
+        return language
+
+    def reset(self):
+        self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
+
+    def get_batch(self):
+
+        # If in evaluation mode, do not sample language, but run through everything sequentially`
+        if self.eval:
+            if not self.seq_tracking[self.current_language]['exhausted']:
+                language = self.current_language
+            else:
+                self.current_language = next(self.language_iter)
+                language = self.current_language
+        else:
+            language = self.__get_language()
+
+        seq_len = max(200, int(self.seq_len.sample()))
+        data, target = get_batch(self.data[language], seq_len, self.seq_tracking[language].idx, device=self.device)
+
+        if self.eval:
+            return data, target
+        else:
+            return data, target, seq_len
+
+    def get_total_iters(self, seq_len: int):
+        if not self.total_iters:
+            self.total_iters = 0
+            for language, data in self.data.items():
+                self.total_iters += self.batchsize * round(data.size(1) / seq_len)
+
+        return self.total_iters
+
+    def is_exhausted(self):
+        return all([d.exhausted for _, d in self.seq_tracking.items()])
+
+    def __len__(self):
+        # TODO: This needs to be implemented
+        return 1
+
+
+def read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')) -> (str, list, int):
     """
     Reads the file
     :param filepath: The path to the file to be read in
@@ -239,7 +309,7 @@ def read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')):
     return split, data, n_tokens
 
 
-def process_language_data(filepath, processor, language):
+def process_language_data(filepath, processor, language) -> (str, Dataset):
     """
     Process a file, wraps read_raw_data and returns the split name and actual dataset.
     :param filepath: Path to the file to be read.
@@ -297,3 +367,30 @@ def batchify(data: torch.Tensor, batchsize: int):
     data = data.narrow(0, 0, n_batches * batchsize)
     data = data.view(batchsize, -1).contiguous()
     return data
+
+
+def get_batch(source: torch.Tensor, seq_len: int, tracking: DotDict, device='cpu'):
+    # If we're out of data, take only what we can
+    seq_len = min(seq_len, len(source) - 1 - tracking.idx)
+
+    data = source[tracking.idx:tracking.idx + seq_len].to(device)
+    target = source[tracking.idx + 1:tracking.idx + 1 + seq_len].view(-1).to(device)
+
+    tracking.idx += seq_len
+    if tracking.idx >= len(source) - 1:
+        tracking.idx = 0
+        tracking.exhausted = True
+
+    return data, target
+
+
+def get_sampling_probabilities(datasets: dict, pwr: float) -> Categorical:
+    probabilities = torch.zeros(len(datasets))
+
+    i = 0
+    probs = torch.tensor([1. * len(data) for _, data in datasets.items()])
+    probs /= probs.sum()
+    probs = torch.pow(probs, pwr)
+    probs /= probs.sum()
+
+    return Categorical(probs)
