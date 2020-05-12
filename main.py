@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import warnings
+warnings.filterwarnings("ignore")
+
 import logging
 import math
 import sys
@@ -125,9 +128,10 @@ def main():
 
                 loss = raw_loss
 
-                if args.clip: torch.nn.utils.clip_grad_norm_(params, args.clip)
-
                 loss.backward()
+                if args.clip: 
+                    torch.nn.utils.clip_grad_norm_(params, args.clip)
+
                 optimizer.step()
 
                 total_loss += raw_loss.data
