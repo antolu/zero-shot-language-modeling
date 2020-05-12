@@ -26,7 +26,8 @@ def get_args():
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
                         help="The learning rate for the Adam optimiser.")
-    parser.add_argument('--bptt', type=float, default=125)
+    parser.add_argument('--bptt', type=float, default=125, help='Mean sequence length')
+    parser.add_argument('--clip', type=float, default=0.25, help='Gradient clipping')
     parser.add_argument("--batchsize", '--train-batchsize', type=int, default=128,
                         help="The batchsize to use in training")
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout applied to layers')

@@ -189,9 +189,6 @@ def main():
             test()
         except KeyboardInterrupt:
             log.info('Registered KeyboardInterrupt. Stopping training.')
-            pass
-        finally:
-            log.exception('Possible stack trace: ')
             log.info('Saving last model to disk')
             save_model(path.join(args.dir_model, '{}_epoch{}.pth'.format(timestamp, epoch)),
                        (model, loss_function, optimizer))

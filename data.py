@@ -367,7 +367,7 @@ def save_tensor(filepath: str, data: Dataset):
 def batchify(data: torch.Tensor, batchsize: int):
     n_batches = data.size(0) // batchsize
     data = data.narrow(0, 0, n_batches * batchsize)
-    data = data.view(batchsize, -1).contiguous()
+    data = data.view(batchsize, -1).t().contiguous()
     return data
 
 
