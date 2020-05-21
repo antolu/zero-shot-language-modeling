@@ -1,9 +1,11 @@
 import torch.nn as nn
-import torchnlp.nn as nlp
+
+from regularisation import weight_drop, LockedDropout
 
 
 class LSTM(nn.Module):
-    def __init__(self, n_token: int, n_input: int, n_hidden: int, n_layers: int, dropout: float = 0.4, dropouth: float = 0.1, dropouti: float = 0.1, dropoute:float = 0.1,
+    def __init__(self, n_token: int, n_input: int, n_hidden: int, n_layers: int, dropout: float = 0.4,
+                 dropouth: float = 0.1, dropouti: float = 0.1, dropoute: float = 0.1,
                  wdrop: float = 0.2, wdrop_layers: list = None):
         """
         Base LSTM for the language model
@@ -33,21 +35,24 @@ class LSTM(nn.Module):
         """
         super().__init__()
 
-        self.lstms = nn.ModuleList(
-            [nlp.WeightDropLSTM(n_input if l == 0 else n_hidden, n_hidden if l != n_layers - 1 else n_input, 1,
-                                weight_dropout=wdrop) if wdrop_layers is None or l not in wdrop_layers else
-             nn.LSTM(n_input if l == 0 else n_hidden, n_hidden if l != n_layers - 1 else n_input, 1, dropout=0)
-             for l in range(n_layers)]
-        )
+        self.lstms = [nn.LSTM(n_input if l == 0 else n_hidden, n_hidden if l != n_layers - 1 else n_input, 1, dropout=0)
+                      for l in range(n_layers)]
+
+        if wdrop_layers is not None:
+            for l, lstm in enumerate(self.lstms):
+                if l in wdrop_layers:
+                    self.lstms[l] = weight_drop(lstm, ['weight_hh_l0'], wdrop)
+
+        self.lstms = nn.ModuleList(self.lstms)
 
         self.n_inputs = n_input
         self.n_hidden = n_hidden
         self.n_layers = n_layers
 
-        self.edrop = nlp.LockedDropout(dropoute)
-        self.idrop = nlp.LockedDropout(dropouti)
-        self.hdrop = nlp.LockedDropout(dropouth)
-        self.odrop = nlp.LockedDropout(dropout)
+        self.edrop = LockedDropout(dropoute)
+        self.idrop = LockedDropout(dropouti)
+        self.hdrop = LockedDropout(dropouth)
+        self.odrop = LockedDropout(dropout)
         self.embedding_encoder = nn.Embedding(n_token, n_input)
 
     def forward(self, input, hidden):
