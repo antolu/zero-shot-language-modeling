@@ -23,10 +23,10 @@ installCUDA() {
 
 installConda() {
 	curl -L https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o miniconda.sh
-	bash miniconda.sh -b -p $HOME/.miniconda
+	bash miniconda.sh -b -p $HOME/.conda
 	rm -f miniconda.sh
 	echo 'eval "$($HOME/.miniconda/bin/conda shell.zsh hook)"' >> ~/.zshrc
-	eval "$($HOME/.miniconda/bin/conda shell.zsh hook)"
+	eval "$($HOME/.conda/bin/conda shell.zsh hook)"
 }
 
 installPythonPackages() {

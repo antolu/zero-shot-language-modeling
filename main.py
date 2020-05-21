@@ -19,7 +19,7 @@ from data import Data, DataLoader, get_sampling_probabilities
 from parser import get_args
 from utils import save_model, load_model, detach
 
-sys.path.insert(0, 'lstm')
+# sys.path.insert(0, 'lstm')
 
 from torch.optim import Adam
 from model import LSTM
@@ -125,7 +125,7 @@ def main():
                 hidden = detach(hidden)
                 optimizer.zero_grad()
 
-                output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, return_h=True)
+                output, hidden = model(data, hidden)
                 raw_loss = loss_function(output, targets)
 
                 loss = raw_loss

@@ -72,19 +72,18 @@ class LSTM(nn.Module):
                 outputs.append(raw_output)
         hidden = new_hidden
 
-        output = self.vardrop(raw_output, self.dropout)
+        output = self.odrop(raw_output)
         outputs.append(output)
 
         result = output.view(output.size(0) * output.size(1), output.size(2))
 
         return result, hidden
 
+    def init_hidden(self, batchsize: int) -> []:
+        weight = next(self.parameters())
 
-def init_hidden(self, batchsize: int) -> []:
-    weight = next(self.parameters())
+        hidden = [(weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs),
+                   weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs))
+                  for l in range(self.n_layers)]
 
-    hidden = [(weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs),
-               weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs))
-              for l in range(self.n_layers)]
-
-    return hidden
+        return hidden
