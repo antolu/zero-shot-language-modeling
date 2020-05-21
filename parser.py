@@ -22,7 +22,7 @@ def get_args():
                            help="Train the model")
     traintest.add_argument("--test", action="store_true",
                            help="Test the model")
-    parser.add_argument('--resume', action='store_true', help='Resume training', default=False)
+    parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument("--no-epochs", type=int, default=6, dest="no_epochs",
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
@@ -52,7 +52,6 @@ def get_args():
 
     parser.add_argument('--workers', default=8, type=int,
                         help="Number of workers for training the network")
-    parser.add_argument('--resume', default=False, type=bool)
     parser.add_argument('--start-epoch', default=0, type=int, dest="start_epoch",
                         help="The epoch to start/resume training at")
     parser.add_argument('--patience', default=1, type=int)

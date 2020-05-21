@@ -205,7 +205,7 @@ def main():
             for epoch in pbar:
                 train(train_loader)
 
-                val_loss = evaluate(val_set)
+                val_loss = evaluate(val_loader)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
