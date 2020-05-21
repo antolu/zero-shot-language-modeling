@@ -22,7 +22,7 @@ def get_args():
                            help="Train the model")
     traintest.add_argument("--test", action="store_true",
                            help="Test the model")
-    parser.add_argument("--no-epochs", type=int, default=100, dest="no_epochs",
+    parser.add_argument("--no-epochs", type=int, default=6, dest="no_epochs",
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
                         help="The learning rate for the Adam optimiser.")
@@ -30,8 +30,8 @@ def get_args():
     parser.add_argument('--clip', type=float, default=0.25, help='Gradient clipping')
     parser.add_argument("--batchsize", '--train-batchsize', type=int, default=128,
                         help="The batchsize to use in training")
-    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout applied to layers')
-    parser.add_argument('--dropouti', type=float, default=0, help='Dropout for input embedding layers')
+    parser.add_argument('--dropout', type=float, default=0.4, help='Dropout applied to layers')
+    parser.add_argument('--dropouti', type=float, default=0.1, help='Dropout for input embedding layers')
     parser.add_argument('--dropouth', type=float, default=0.1, help='Dropout for rnn layers')
     parser.add_argument('--dropoute', type=float, default=0.1, help='Dropout to remove words from embedding layer')
     parser.add_argument('--wdrop', type=float, default=0.2,
