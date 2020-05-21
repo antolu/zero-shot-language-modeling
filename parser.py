@@ -11,7 +11,7 @@ def get_args():
                         help="Which dataset to use", choices=['ipa', 'latin'])
     parser.add_argument('--dir_model', default='checkpoints/',
                         help='Path to project data')
-    parser.add_argument('--pretrained-model', dest='pretrained_model', default=None,
+    parser.add_argument('--checkpoint', '-c', default=None,
                         help='path to pretrained-model')
     parser.add_argument('--remap', action='store_true', help='Redo character mappings.')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
@@ -22,6 +22,7 @@ def get_args():
                            help="Train the model")
     traintest.add_argument("--test", action="store_true",
                            help="Test the model")
+    parser.add_argument('--resume', action='store_true', help='Resume training', default=False)
     parser.add_argument("--no-epochs", type=int, default=6, dest="no_epochs",
                         help="Number of epochs to train the model")
     parser.add_argument("-lr", "--lr", type=float, default=1.5e-4,
