@@ -19,8 +19,9 @@ from utils import save_model, load_model, detach
 sys.path.insert(0, 'lstm')
 
 from torch.optim import Adam
-# from model import LSTM
-from lstm.model import RNNModel
+from model import LSTM
+
+# from lstm.model import RNNModel
 
 log = logging.getLogger('log')
 log.setLevel(logging.DEBUG)
@@ -57,14 +58,15 @@ def main():
 
     n_token = len(data.idx_to_character)
 
-    # model = LSTM(400, n_hidden=1150, n_layers=3)
-    model = RNNModel('LSTM', ntoken=n_token, nhid=1840, ninp=400, nlayers=3, dropout=args.dropout,
-                     dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop)
-    # model = model.to(device)
+    model = LSTM(n_token, n_input=400, n_hidden=1150, n_layers=3, dropout=args.dropout, dropoute=args.dropoute,
+                 dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop, wdrop_layers=[0])
+    # model = RNNModel('LSTM', ntoken=n_token, nhid=1840, ninp=400, nlayers=3, dropout=args.dropout,
+    #                  dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop)
+    model = model.to(device)
 
     # backwards combatibility
-    if torch.cuda.is_available():
-        model = model.cuda()
+    # if torch.cuda.is_available():
+    #     model = model.cuda()
 
     optimizer = Adam(model.parameters(), lr=1e-4)
     loss_function = nn.CrossEntropyLoss().to(device)
