@@ -108,7 +108,7 @@ def main():
                 'optimizer': optimizer.state_dict(),
             }
         if use_apex:
-            checkpoint['apex'] = amp.state_dict()
+            checkpoint['amp'] = amp.state_dict()
 
         return checkpoint
 
@@ -125,7 +125,10 @@ def main():
 
         with tqdm.tqdm(total=total_iters) as pbar:
             while not dataloader.is_exhausted():
-                data, targets = dataloader.get_batch()
+                try:
+                    data, targets = dataloader.get_batch()
+                except StopIteration:
+                    break
                 output, hidden = model(data, hidden)
                 loss = loss_function(output, targets)
                 total_loss += len(data) * loss.data
