@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
 import warnings
+
 warnings.filterwarnings("ignore")
 
 import logging
 import math
-import sys
-import traceback
 from datetime import datetime
 from os import path
 
@@ -22,21 +21,19 @@ from utils import save_model, load_model, detach
 from torch.optim import Adam
 from model import LSTM
 
-
-log = logging.getLogger('log')
+log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
 log.addHandler(ch)
 
 
-# TODO: softmax for loss
 # TODO: implement universal prior
 
 
 def main():
     args = get_args()
-    
+
     if torch.cuda.is_available() and args.fp16:
         log.info('Loading Nvidia Apex and using AMP')
         from apex import amp
@@ -50,7 +47,7 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
     data = Data(args.datadir, args.dataset)
-    data.load(args.remap, args.rebuild)
+    data.load(args.rebuild)
 
     train_set = data.get_split('train')
     val_set = data.get_split('valid')
@@ -72,7 +69,6 @@ def main():
     optimizer = Adam(model.parameters(), lr=1e-4)
     loss_function = nn.CrossEntropyLoss().to(device)
     params = list(model.parameters()) + list(loss_function.parameters())
-
 
     if use_apex:
         model, optimizer = amp.initialize(model, optimizer)
@@ -102,16 +98,15 @@ def main():
 
     def get_checkpoint(epoch: int):
         checkpoint = {
-                'epoch': epoch,
-                'model': model.state_dict(),
-                'loss': loss_function.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'loss': loss_function.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
         if use_apex:
             checkpoint['amp'] = amp.state_dict()
 
         return checkpoint
-
 
     def evaluate(dataloader: DataLoader):
         model.eval()
@@ -140,7 +135,7 @@ def main():
 
         dataloader.reset()
 
-        return total_loss / args.test_batchsize
+        return total_loss / dataloader.get_total_tokens()
 
     def train(dataloader: DataLoader):
         total_loss = 0
@@ -172,7 +167,7 @@ def main():
                 else:
                     loss.backward()
 
-                if args.clip: 
+                if args.clip:
                     torch.nn.utils.clip_grad_norm_(params, args.clip)
 
                 optimizer.step()
@@ -182,7 +177,6 @@ def main():
 
                 # reset lr to optimiser default
                 optimizer.param_groups[0]['lr'] = lr2
-
 
                 pbar.set_description('Training, end of batch {} | Loss {}'.format(batch, loss.data))
                 pbar.update(1)
@@ -212,7 +206,8 @@ def main():
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
-                save_model(path.join(args.dir_model, '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
+                save_model(path.join(args.dir_model,
+                                     '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
                            get_checkpoint(epoch + 1))
 
                 # Early stopping
@@ -240,8 +235,9 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
-            save_model(path.join(args.dir_model, '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
-                        get_checkpoint(epoch))
+            save_model(path.join(args.dir_model,
+                                 '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
+                       get_checkpoint(epoch))
     else:
         test()
 

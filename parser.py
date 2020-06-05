@@ -13,7 +13,6 @@ def get_args():
                         help='Path to project data')
     parser.add_argument('--checkpoint', '-c', default=None,
                         help='path to pretrained-model')
-    parser.add_argument('--remap', action='store_true', help='Redo character mappings.')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
 
     # Arguments concerning training and testing the model
