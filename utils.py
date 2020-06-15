@@ -44,7 +44,40 @@ class DotDict(dict):
 
 
 def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                   optimizer: torch.optim, use_apex=False, amp=None, **kwargs):
+                   optimizer: torch.optim.optimizer, use_apex=False, amp=None, **kwargs):
+    """
+    Packages network parameters into a picklable dictionary containing keys
+    * epoch: current epoch
+    * model: the network model
+    * loss: the loss function
+    * optimizer: the torch optimizer
+    * use_apex: use nvidia apex for AMP or not
+    * amp: the nvidia AMP object
+
+    Parameters
+    ----------
+    epoch : int
+        The current epoch of training
+    model : LSTM
+        The network model
+    loss_function : SplitCrossEntropyLoss or CrossEntropyLoss
+        The loss function
+    optimizer : torch.optim.optimizer
+        The optimizer function
+    use_apex : bool
+        If mixed precision mode is activated. If this is true, the `amp` argument should be supplied as well.
+        The default value is False.
+    amp :
+        The nvidia apex amp object, should contain information about state of training
+    kwargs :
+        Not used
+
+    Returns
+    -------
+    checkpoint: dict
+        A picklable dict containing the checkpoint
+
+    """
     checkpoint = {
         'epoch': epoch,
         'model': model.state_dict(),
@@ -57,14 +90,47 @@ def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntro
     return checkpoint
 
 
-def save_model(filename: str, data):
-    with open(filename, 'wb') as f:
+def save_model(filepath: str, data):
+    """
+    Saves a picklable checkpoint to disk
+    
+    Parameters
+    ----------
+    filepath : str
+        The path to where the checkpoint should be saved.
+    data : dict
+        A picklable object that is to be saved to disk
+
+    """
+    with open(filepath, 'wb') as f:
         torch.save(data, f)
 
 
-def load_model(filename: str, model: LSTM, optimizer: torch.optim,
+def load_model(filepath: str, model: LSTM, optimizer: torch.optim.optimizer,
                loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, **kwargs):
-    with open(filename, 'rb') as f:
+    """
+    Load a checkpointed model into memory by reference
+    
+    Parameters
+    ----------
+    filepath : str
+        The path to the file on disk containing the checkpoint
+    model : LSTM
+        The model to load the checkpoint to
+    optimizer : torch.optim.optimizer
+        The optimizer to load the checkpoint to
+    loss_function : SplitCrossEntropyLoss or CrossEntropyLoss
+        The loss function to load the checkpoint to
+    amp :
+        The nvidia apex object to load AMP data to
+    kwargs :
+        Not used
+
+    Returns
+    -------
+
+    """
+    with open(filepath, 'rb') as f:
         checkpoint = torch.load(f)
 
     model.load_state_dict(checkpoint['model'])
@@ -77,7 +143,8 @@ def load_model(filename: str, model: LSTM, optimizer: torch.optim,
         amp.load_state_dict(checkpoint['amp'])
 
 
-def detach(data):
+def detach(data: Union[torch.Tensor, list]):
+
     if isinstance(data, torch.Tensor):
         return data.detach()
     elif isinstance(data, tuple) or isinstance(data, list):

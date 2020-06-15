@@ -17,17 +17,11 @@ class WeightDrop(object):
             A list of weight names to apply weight drop to
         dropout: float
             The amount of weight drop to apply
-        original_module_forward
-            The forward function of the original module
 
-        See Also
-        --------
-        weight_drop: Weight drop
         """
         self.weights_names_ls = weights_names_ls
         self.module = module
         self.dropout = dropout
-        # self.original_module_forward = original_module_forward
 
     def __call__(self, *args, **kwargs):  # the function formerly known as "forward_new"
         for name_param in self.weights_names_ls:
@@ -42,7 +36,12 @@ class WeightDrop(object):
 
 class LockedDropout(nn.Module):
     """
-    Variational dropout. Multiplies with the same mask at each time step with gaussian mask
+    Variational dropout. Multiplies with the same mask at each time step with gaussian mask.
+
+    Attributes
+    ----------
+    dropout: float
+        The amount of dropout to apply
     """
 
     def __init__(self, dropout: float = 0.5):
@@ -69,7 +68,28 @@ class LockedDropout(nn.Module):
 
 
 class EmbeddedDropout(nn.Module):
+    """
+    Applies dropout to the embeddings
+
+    Attributes
+    ----------
+    dropout: float
+        The amount of dropout to apply
+    scale: torch.Tensor
+        Scale to apply
+    """
     def __init__(self, dropout: float = 0.1, scale=None):
+        """
+
+        Parameters
+        ----------
+        dropout : float
+            The amount of dropout to apply
+            Default is 0.1
+        scale : torch.Tensor
+            The scale to apply
+            Unknown use
+        """
         super().__init__()
         self.dropout = dropout
         self.scale = scale
@@ -77,7 +97,7 @@ class EmbeddedDropout(nn.Module):
     def __call__(self, embed: nn.Embedding, words):
         if self.dropout and self.training:
 
-            mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - self.dropout).expand_as(
+            mask = embed.weight.data.clone().resize_((embed.weight.size(0), 1)).bernoulli_(1 - self.dropout).expand_as(
                 embed.weight) / (1 - self.dropout)
             masked_embed_weight = mask * embed.weight
 
@@ -94,26 +114,6 @@ class EmbeddedDropout(nn.Module):
                                           embed.scale_grad_by_freq, embed.sparse
                                           )
         return X
-
-
-def embedded_dropout(embed: nn.Embedding, words, dropout=0.1, scale=None):
-    if dropout:
-        mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - dropout).expand_as(
-            embed.weight) / (1 - dropout)
-        masked_embed_weight = mask * embed.weight
-    else:
-        masked_embed_weight = embed.weight
-    if scale:
-        masked_embed_weight = scale.expand_as(masked_embed_weight) * masked_embed_weight
-
-    padding_idx = embed.padding_idx
-    if padding_idx is None:
-        padding_idx = -1
-
-    X = torch.nn.functional.embedding(words, masked_embed_weight, padding_idx, embed.max_norm, embed.norm_type,
-                                      embed.scale_grad_by_freq, embed.sparse
-                                      )
-    return X
 
 
 if __name__ == '__main__':
@@ -175,6 +175,7 @@ if __name__ == '__main__':
 
     words = torch.randint(low=0, high=V - 1, size=(batch_size, bptt), dtype=torch.long)
 
+    embedded_dropout = EmbeddedDropout()
     origX = embed(words)
     X = embedded_dropout(embed, words)
 

@@ -10,16 +10,31 @@ from regularisation import WeightDrop, LockedDropout, EmbeddedDropout
 
 class MLP(nn.Module):
     """
-    Multi-Layer Perceptron block
+    A Multi-Layer Perception Block
 
-    Args:
-     - input_dim: the input neurons on the first layer.
-     - dimensions: a list or tuple of the sizes of the networks.
-     - activation: the activation function for each layer.
+    Attributes
+    ----------
+    mlp: torch.nn.sequential
+        A torch sequential that is the MLP
     """
-
     def __init__(self, input_dim: int, dimensions: Union[int, list], activation: str = 'relu', dropout: float = 0.0):
+        """
+
+        Parameters
+        ----------
+        input_dim : int
+            The input dimensions to the MLP
+        dimensions : int or list
+            The intermediate dimensions for the MLP if the argument is a list. If the argument is an integer it represents the size of the output layers, otherwise the size of the output layer is the last element of the list argument.
+        activation : str
+            The activation method in between linear layers. Only 'relu' is currently supported.
+        dropout : float
+            The amount of dropout to apply in between each linear layer, before the activation function
+        """
         super().__init__()
+
+        assert activation in ['none', 'relu']
+        assert 0.0 < dropout < 1.0
 
         if not isinstance(dimensions, list):
             dimensions = [dimensions]
@@ -27,12 +42,12 @@ class MLP(nn.Module):
 
         layers = []
         for lyr in range(len(dimensions) - 1):
-            layers.append(("linear" + str(lyr + 1),
+            layers.append(('linear' + str(lyr + 1),
                            nn.Linear(dimensions[lyr], dimensions[lyr + 1])))
             if dropout != 0.0 and lyr != len(dimensions) - 2:
                 layers.append(('dropout' + str(lyr + 1), nn.Dropout(dropout)))
-            if activation != "none" and lyr != len(dimensions) - 2:
-                layers.append(("relu" + str(lyr + 1), nn.ReLU()))
+            if activation.lower() != 'none' and lyr != len(dimensions) - 2:
+                layers.append(('relu' + str(lyr + 1), nn.ReLU()))
 
         self.mlp = nn.Sequential(OrderedDict(layers))
 
@@ -50,8 +65,8 @@ class MLP(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, cond_type: str, prior: Tensor, n_token: int, n_input: int, n_hidden: int, n_layers: int, dropout: float = 0.4,
-                 dropouth: float = 0.1, dropouti: float = 0.1, dropoute: float = 0.1,
+    def __init__(self, cond_type: str, prior: Tensor, n_token: int, n_input: int, n_hidden: int, n_layers: int,
+                 dropout: float = 0.4, dropouth: float = 0.1, dropouti: float = 0.1, dropoute: float = 0.1,
                  wdrop: float = 0.2, wdrop_layers: list = None, tie_weights=False, dis_type=False):
         """
         Base LSTM for the language model
@@ -106,6 +121,7 @@ class LSTM(nn.Module):
         self.n_hidden = n_hidden
         self.n_layers = n_layers
 
+        # Dropout layers
         self.edrop = LockedDropout(dropoute)
         self.idrop = LockedDropout(dropouti)
         self.hdrop = LockedDropout(dropouth)
@@ -144,6 +160,34 @@ class LSTM(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, input: torch.Tensor, hidden: torch.Tensor, lang: str, return_h=False):
+        """
+        Forward pass
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            The input to the RNN. Should be a LongTensor
+        hidden : torch.Tensor
+            The hidden layer from the previous pass
+        lang : str
+            The language whose data we are running a forward pass on
+        return_h : bool
+            Return intermediate outputs
+
+        Returns
+        -------
+        result: torch.Tensor
+            The output of the LSTM
+        hidden: torch.Tensor
+            The last hidden layer of the LSTM
+        loss_typ: Unknown or None
+            Unknown use
+        raw_outputs: List[torch.Tensor] or None
+            Contains all the outputs from the intermediate rnns
+        outputs: List[torch.tensor] or None
+            Contains all the outputs from intermediate rnns after applying variational dropout
+
+        """
         embeddings = self.embedding_dropout(self.encoder, input)
 
         embeddings = self.edrop(embeddings)
@@ -188,6 +232,19 @@ class LSTM(nn.Module):
             return result, hidden, loss_typ
 
     def init_hidden(self, batchsize: int) -> list:
+        """
+        Initialize a hidden layer and return it. Currently it is returning a tensor of zeros the size of the inner weight parameters
+        Parameters
+        ----------
+        batchsize : int
+            The batchsize to initialise a hidden layer for
+
+        Returns
+        -------
+        hidden: List[torch.Tensor]
+             A list of size (n_layers) containing zero-initialised hidden layer tensors of size (1, batchsize, layer_size)
+
+        """
         weight = next(self.parameters())
 
         hidden = [(weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs),
