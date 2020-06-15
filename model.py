@@ -1,17 +1,67 @@
-import torch.nn as nn
+from typing import Union
 
-from regularisation import weight_drop, LockedDropout
+import torch
+import torch.nn as nn
+from torch import Tensor
+from collections import OrderedDict
+
+from regularisation import WeightDrop, LockedDropout, EmbeddedDropout
+
+
+class MLP(nn.Module):
+    """
+    Multi-Layer Perceptron block
+
+    Args:
+     - input_dim: the input neurons on the first layer.
+     - dimensions: a list or tuple of the sizes of the networks.
+     - activation: the activation function for each layer.
+    """
+
+    def __init__(self, input_dim: int, dimensions: Union[int, list], activation: str = 'relu', dropout: float = 0.0):
+        super().__init__()
+
+        if not isinstance(dimensions, list):
+            dimensions = [dimensions]
+        dimensions.insert(0, input_dim)
+
+        layers = []
+        for lyr in range(len(dimensions) - 1):
+            layers.append(("linear" + str(lyr + 1),
+                           nn.Linear(dimensions[lyr], dimensions[lyr + 1])))
+            if dropout != 0.0 and lyr != len(dimensions) - 2:
+                layers.append(('dropout' + str(lyr + 1), nn.Dropout(dropout)))
+            if activation != "none" and lyr != len(dimensions) - 2:
+                layers.append(("relu" + str(lyr + 1), nn.ReLU()))
+
+        self.mlp = nn.Sequential(OrderedDict(layers))
+
+        # Xavier initialisation
+        def init_weights(net: nn.Module):
+            for m in net.parameters():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_normal(m.weight)
+                    m.bias.fill_(0.01)
+
+        self.mlp.apply(init_weights)
+
+    def forward(self, inputs):
+        return self.mlp(inputs)
 
 
 class LSTM(nn.Module):
-    def __init__(self, n_token: int, n_input: int, n_hidden: int, n_layers: int, dropout: float = 0.4,
+    def __init__(self, cond_type: str, prior: Tensor, n_token: int, n_input: int, n_hidden: int, n_layers: int, dropout: float = 0.4,
                  dropouth: float = 0.1, dropouti: float = 0.1, dropoute: float = 0.1,
-                 wdrop: float = 0.2, wdrop_layers: list = None):
+                 wdrop: float = 0.2, wdrop_layers: list = None, tie_weights=False, dis_type=False):
         """
         Base LSTM for the language model
 
         Parameters
         ----------
+        cond_type: str
+            What to condition the model on. Support choices ['platanios', 'oestling', 'sutskever', 'none']. If the cond_type is none, the argument prior will not be used, and may be set to None
+        prior: torch.Tensor
+            The prior to condition the model on. Its use depends on the parameter passed in cond_type.
         n_token: int
             Total number of different symbols  / characters in the dataset
         n_input: int
@@ -32,6 +82,10 @@ class LSTM(nn.Module):
             Weight drop probability applied to the LSTM layers
         wdrop_layers: iterable
             A list or tuple specifying which layers to apply weight drop to
+        tie_weights: bool
+            Flag to use weight tying in training.
+        dis_type: bool
+            Unknown use
         """
         super().__init__()
 
@@ -41,10 +95,13 @@ class LSTM(nn.Module):
         if wdrop_layers is not None:
             for l, lstm in enumerate(self.lstms):
                 if l in wdrop_layers:
-                    self.lstms[l] = weight_drop(lstm, ['weight_hh_l0'], wdrop)
+                    self.lstms[l] = WeightDrop(lstm, ['weight_hh_l0'], wdrop)
 
         self.lstms = nn.ModuleList(self.lstms)
+        self.decoder = nn.Linear(n_hidden, n_token)
 
+        cond_type = cond_type.lower()
+        self.cond_type = cond_type
         self.n_inputs = n_input
         self.n_hidden = n_hidden
         self.n_layers = n_layers
@@ -53,10 +110,41 @@ class LSTM(nn.Module):
         self.idrop = LockedDropout(dropouti)
         self.hdrop = LockedDropout(dropouth)
         self.odrop = LockedDropout(dropout)
-        self.embedding_encoder = nn.Embedding(n_token, n_input)
+        self.encoder = nn.Embedding(n_token, n_input)
+        self.embedding_dropout = EmbeddedDropout(dropoute)
 
-    def forward(self, input, hidden):
-        embeddings = self.embedding_encoder(input)
+        if cond_type != 'none':
+            weight = prior.clone()
+            self.prior = nn.Embedding.from_pretrained(weight)
+            self.prior.weight.requires_grad = False
+            self.nlangvec = n_hidden // 16
+        self.tie_weights = tie_weights
+        if tie_weights:
+            self.decoder.weight = self.encoder.weight
+
+        if cond_type == 'sutskever':
+            self.prior2hid = MLP(prior.shape[1], n_hidden)
+            self.prior2inp = MLP(prior.shape[1], n_input) if tie_weights else None
+        elif cond_type == 'oestling':
+            self.prior2vec = [MLP(prior.shape[1], self.nlangvec) for l in range(n_layers)]
+            self.prior2vec = nn.ModuleList(self.prior2vec)
+
+        if dis_type:
+            self.do_dis_typ = True
+            self.dis_typ = MLP(n_input if tie_weights else n_hidden, prior.shape[1])
+            self.loss_typ = nn.modules.distance.PairwiseDistance()
+        else:
+            self.do_dis_typ = False
+
+        self.init_weights()
+
+    def init_weights(self, initrange: float = 0.1):
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.fill_(0)
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, input: torch.Tensor, hidden: torch.Tensor, lang: str, return_h=False):
+        embeddings = self.embedding_dropout(self.encoder, input)
 
         embeddings = self.edrop(embeddings)
 
@@ -66,6 +154,11 @@ class LSTM(nn.Module):
         outputs = []
 
         for l, rnn in enumerate(self.lstms):
+            if self.cond_type == 'oestling':
+                prior = self.prior(lang)
+                prior_emb = self.prior2vec[l].expand(embeddings.size(0), embeddings.size(1), self.nlangvec)
+                raw_output = torch.cat((raw_output, prior_emb), dim=2)
+
             current_input = raw_output
             raw_output, new_h = rnn(raw_output, hidden[l])
             new_hidden.append(new_h)
@@ -82,9 +175,19 @@ class LSTM(nn.Module):
 
         result = output.view(output.size(0) * output.size(1), output.size(2))
 
-        return result, hidden
+        if self.do_dis_typ:
+            raise NotImplementedError('I have no idea what this boolean flag does (:')
+            pred_typ = self.dis_typ(result)
+            loss_typ = self.loss_typ(pred_typ, prior.expand(pred_typ.shape)).mean()
+        else:
+            loss_typ = None
 
-    def init_hidden(self, batchsize: int) -> []:
+        if return_h:
+            return result, hidden, raw_outputs, outputs, loss_typ
+        else:
+            return result, hidden, loss_typ
+
+    def init_hidden(self, batchsize: int) -> list:
         weight = next(self.parameters())
 
         hidden = [(weight.new_zeros(1, batchsize, self.n_hidden if l != self.n_layers - 1 else self.n_inputs),

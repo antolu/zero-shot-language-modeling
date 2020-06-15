@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 
-import warnings
-
-warnings.filterwarnings("ignore")
-
 import logging
 import math
+import random
+import warnings
 from datetime import datetime
 from os import path
+from pprint import pformat
 
 import torch
-import torch.nn as nn
 import tqdm
-from torch.distributions.normal import Normal
-
-from data import Data, DataLoader, get_sampling_probabilities
-from parser import get_args
-from utils import save_model, load_model, detach
-
 from torch.optim import Adam
+
+from bayesian import BoringPrior, EWC
+from criterion import SplitCrossEntropyLoss
+from data import Data, DataLoader, get_sampling_probabilities
+from engine import train, evaluate
 from model import LSTM
+from parser import get_args
+from utils import get_checkpoint, save_model, load_model, DotDict
+
+warnings.filterwarnings("ignore")
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -28,51 +29,81 @@ ch.setLevel(logging.INFO)
 log.addHandler(ch)
 
 
-# TODO: implement universal prior
-
-
 def main():
     args = get_args()
 
+    log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
+    assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
+
+    use_apex = False
     if torch.cuda.is_available() and args.fp16:
         log.info('Loading Nvidia Apex and using AMP')
         from apex import amp
         use_apex = True
     else:
         log.info('Using FP32')
-        use_apex = False
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     log.info('Using device {}.'.format(device))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+    log.info(f'Using time stamp {timestamp} to save models.')
+
+    if not args.no_seed:
+        log.info(f'Setting random seed to {args.seed} for reproducibility.')
+        torch.manual_seed(args.seed)
+        random.seed(args.seed)
 
     data = Data(args.datadir, args.dataset)
     data.load(args.rebuild)
 
+    # TODO: only load data tensors upon calling get_split, else only save the paths in memory
     train_set = data.get_split('train')
-    val_set = data.get_split('valid')
+    val_set = data.get_split('valid')  # TODO: use args.dev_lang to get validation set
     test_set = data.get_split('test')
 
     train_language_distr = get_sampling_probabilities(train_set, 0.8)
-    seq_len_distr = Normal(loc=args.bptt, scale=5)
-    train_loader = DataLoader(train_set, args.batchsize, seq_len=seq_len_distr, lang_sampler=train_language_distr,
-                              device=device, eval=False)
+    train_loader = DataLoader(train_set, args.batchsize, bptt=args.bptt,
+                              lang_sampler=train_language_distr, device=device, eval=False)
     val_loader = DataLoader(val_set, args.valid_batchsize, device=device, eval=True)
     test_loader = DataLoader(test_set, args.test_batchsize, device=device, eval=True)
 
     n_token = len(data.idx_to_character)
 
-    model = LSTM(n_token, n_input=400, n_hidden=1150, n_layers=3, dropout=args.dropout, dropoute=args.dropoute,
-                 dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop, wdrop_layers=[0])
-    model = model.to(device)
+    # Load and preprocess matrix of typological features
+    # TODO: implement this, the OEST
+    # prior_matrix = load_prior(args.prior, corpus.dictionary.lang2idx)
+    # n_components = min(50, *prior_matrix.shape)
+    # pca = PCA(n_components=n_components, whiten=True)
+    # prior_matrix = pca.fit_transform(prior_matrix)
+    prior = None
 
-    optimizer = Adam(model.parameters(), lr=1e-4)
-    loss_function = nn.CrossEntropyLoss().to(device)
+    model = LSTM(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
+                 dropout=args.dropout,
+                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
+                 wdrop_layers=[0], tie_weights=args.tie_weights).to(device)
+
+    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+
+    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a dataset of this small size
     params = list(model.parameters()) + list(loss_function.parameters())
 
     if use_apex:
         model, optimizer = amp.initialize(model, optimizer)
 
+    parameters = DotDict({
+        'model': model,
+        'optimizer': optimizer,
+        'loss': loss_function,
+        'parameters': params,
+        'use_apex': use_apex,
+        'amp': amp if use_apex else None,
+        'clip': args.clip,
+        'alpha': args.alpha,
+        'beta': args.beta,
+    })
+
+    # Load model checkpoint if available
     start_epoch = 1
     if args.resume:
         if args.checkpoint is None:
@@ -80,7 +111,7 @@ def main():
             checkpoint = None
         else:
             log.info('Loading the checkpoint at {}'.format(args.checkpoint))
-            checkpoint = load_model(args.checkpoint)
+            checkpoint = load_model(args.checkpoint, **parameters)
 
             model.load_state_dict(checkpoint['model'])
             optimizer.load_state_dict(checkpoint['optimizer'])
@@ -91,102 +122,12 @@ def main():
             if use_apex:
                 amp.load_state_dict(checkpoint['amp'])
 
-    # TODO: implement universal prior
-    # p(w|Dt) \propto exp[-.5 (w-w*)^T * H * (w-w*)],
-    # H = -diag[f] + 1/sigma^2 * I
-    # f_i = \sum^{l \in D_T} [\nabla log p(x^l | w) ]^2_i
-
-    def get_checkpoint(epoch: int):
-        checkpoint = {
-            'epoch': epoch,
-            'model': model.state_dict(),
-            'loss': loss_function.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }
-        if use_apex:
-            checkpoint['amp'] = amp.state_dict()
-
-        return checkpoint
-
-    def evaluate(dataloader: DataLoader):
-        model.eval()
-
-        total_loss = 0
-
-        hidden = model.init_hidden(dataloader.batchsize)
-
-        total_iters = dataloader.get_total_iters(args.bptt)
-        batch = 0
-
-        with tqdm.tqdm(total=total_iters) as pbar:
-            while not dataloader.is_exhausted():
-                try:
-                    data, targets = dataloader.get_batch()
-                except StopIteration:
-                    break
-                output, hidden = model(data, hidden)
-                loss = loss_function(output, targets)
-                total_loss += len(data) * loss.data
-                hidden = detach(hidden)
-
-                batch += 1
-
-                pbar.set_description('Evaluation, finished batch {} | loss {}'.format(batch, loss.data))
-
-        dataloader.reset()
-
-        return total_loss / dataloader.get_total_tokens()
-
-    def train(dataloader: DataLoader):
-        total_loss = 0
-        hidden = model.init_hidden(dataloader.batchsize)
-
-        batch = 0
-
-        total_iters = dataloader.get_total_iters(args.bptt)
-
-        with tqdm.tqdm(total=total_iters) as pbar:
-            while not dataloader.is_exhausted():
-                data, targets, seq_len = dataloader.get_batch()
-
-                lr2 = optimizer.param_groups[0]['lr']
-                optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
-
-                model.train()
-                hidden = detach(hidden)
-                optimizer.zero_grad()
-
-                output, hidden = model(data, hidden)
-                raw_loss = loss_function(output, targets)
-
-                loss = raw_loss
-
-                if use_apex:
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    loss.backward()
-
-                if args.clip:
-                    torch.nn.utils.clip_grad_norm_(params, args.clip)
-
-                optimizer.step()
-
-                total_loss += raw_loss.data
-                batch += 1
-
-                # reset lr to optimiser default
-                optimizer.param_groups[0]['lr'] = lr2
-
-                pbar.set_description('Training, end of batch {} | Loss {}'.format(batch, loss.data))
-                pbar.update(1)
-
-        dataloader.reset()
+    saved_models = list()
 
     def test():
         log.info('-' * 89)
         log.info('Running test set...')
-        test_loss = evaluate(test_loader)
+        test_loss = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
         log.info('-' * 89)
 
@@ -200,15 +141,16 @@ def main():
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1)
             for epoch in pbar:
-                train(train_loader)
+                train(train_loader, **parameters)
 
-                val_loss = evaluate(val_loader)
+                val_loss = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
-                save_model(path.join(args.dir_model,
-                                     '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
-                           get_checkpoint(epoch + 1))
+                filename = path.join(args.dir_model,
+                                     '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''))
+                save_model(filename, get_checkpoint(epoch + 1, **parameters))
+                saved_models.append(filename)
 
                 # Early stopping
                 if val_loss < stored_loss:
@@ -238,8 +180,24 @@ def main():
             save_model(path.join(args.dir_model,
                                  '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
                        get_checkpoint(epoch))
-    else:
+    elif args.test:
         test()
+
+    # Only test on existing languages if there are no held out languages
+    if not args.target:
+        exit(0)
+
+    # If use UNIV, calculate informed prior, else use boring prior
+    if args.laplace:
+        laplace_loader = DataLoader(train_set, args.batchsize, bptt=100, device=device, eval=False)
+        ewc = EWC(model, loss_function, laplace_loader)
+    else:
+        ewc = BoringPrior()
+
+    # Refine on 100 samples on each target
+    if args.refine:
+        # TODO: implement laplacian approximation
+        raise NotImplementedError
 
 
 if __name__ == "__main__":

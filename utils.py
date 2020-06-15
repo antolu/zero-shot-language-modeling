@@ -1,4 +1,9 @@
+from typing import Union
+
 import torch
+from torch.nn import CrossEntropyLoss, LSTM
+
+from criterion import SplitCrossEntropyLoss
 
 
 class DotDict(dict):
@@ -38,14 +43,38 @@ class DotDict(dict):
         del self.__dict__[key]
 
 
+def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
+                   optimizer: torch.optim, use_apex=False, amp=None, **kwargs):
+    checkpoint = {
+        'epoch': epoch,
+        'model': model.state_dict(),
+        'loss': loss_function.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }
+    if use_apex:
+        checkpoint['amp'] = amp.state_dict()
+
+    return checkpoint
+
+
 def save_model(filename: str, data):
     with open(filename, 'wb') as f:
         torch.save(data, f)
 
 
-def load_model(filename):
+def load_model(filename: str, model: LSTM, optimizer: torch.optim,
+               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, **kwargs):
     with open(filename, 'rb') as f:
-        return torch.load(f)
+        checkpoint = torch.load(f)
+
+    model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    loss_function.load_state_dict(checkpoint['loss'])
+
+    if amp:
+        if 'amp' not in checkpoint:
+            raise ValueError('Key amp not in checkpoint. Cannot load apex.')
+        amp.load_state_dict(checkpoint['amp'])
 
 
 def detach(data):

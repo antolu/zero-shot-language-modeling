@@ -6,10 +6,7 @@ from sys import exit
 from pprint import pformat
 from typing import Tuple, Union, List, KeysView, Dict
 from time import sleep
-from collections import OrderedDict
 from multiprocessing import cpu_count, Process, Manager
-from multiprocessing.pool import ThreadPool
-from itertools import product
 
 import torch
 from torch.distributions.categorical import Categorical
@@ -221,8 +218,8 @@ class Data:
         """
         return self.data.keys()
 
-    def get_split(self, split: str, language: str = 'all') -> Dict:
-        """Returns the a datqset split based on the argument `split`
+    def get_split(self, split: str, language: Union[str, list] = 'all') -> Dict:
+        """Returns the dataset split based on the argument `split`
 
         Parameters
         ----------
@@ -244,6 +241,8 @@ class Data:
             output = {lan: splits[split].data if split in splits else None for lan, splits in self.data.items()}
 
             return output
+        elif isinstance(language, list):
+            raise NotImplementedError
 
         return {language: self.data[language][split].data}
 
@@ -336,14 +335,32 @@ class Constant:
         return self.constant
 
 
+class SequenceSequencer:
+    def __init__(self, bptt: int, constant=False):
+        self.bptt = bptt
+        self.constant = constant
+
+    def sample(self):
+        if self.constant:
+            return self.bptt
+
+        bptt = self.bptt if torch.rand(1) < 0.95 else self.bptt / 2
+        distr = torch.normal(bptt, 5)
+        seq_len = max(5, int(distr.sample()))
+        seq_len = min(seq_len, 200)
+
+        return seq_len
+
+
 class DataLoader:
     """ """
 
-    def __init__(self, data: dict, batchsize: int, seq_len=125, lang_sampler=None, idx_to_language=None,
-                 device: str = 'cpu', oversample: bool = True, eval: bool = True):
+    def __init__(self, data: dict, batchsize: int, bptt=125, lang_sampler=None, idx_to_language=None,
+                 device: Union[str, torch.device] = 'cpu', oversample: bool = True, eval: bool = True):
         self.eval = eval
         self.data = data
-        self.seq_len = Constant(seq_len) if isinstance(seq_len, int) else seq_len
+        self.seq_len = SequenceSequencer(bptt, constant=self.eval)
+        self.bptt = bptt
         self.lang_sampler = get_sampling_probabilities(self.data, 1.0) if lang_sampler is None else lang_sampler
         self.batchsize = batchsize
         self.device = device
@@ -377,9 +394,13 @@ class DataLoader:
 
     def reset(self):
         """ """
+        self.seq_tracking = DotDict({lan: {'idx': d.idx, 'exhausted': False} for lan, d in self.seq_tracking.items()})
+
+    def reset_all(self):
+        """ """
         self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
 
-    def get_batch(self) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, int]]:
+    def get_batch(self) -> Union[Tuple[torch.Tensor, torch.Tensor, str], Tuple[torch.Tensor, torch.Tensor, str, int]]:
         """"""
 
         # If in evaluation mode, do not sample language, but run through everything sequentially`
@@ -392,13 +413,16 @@ class DataLoader:
         else:
             language = self.__get_language()
 
-        seq_len = min(200, int(self.seq_len.sample()))
-        data, target = get_batch(self.data[language], seq_len, self.seq_tracking[language], device=self.device)
+        # prevent too big or too small seq_lens
+        seq_len = self.seq_len.sample()
+        data, target = create_batch(self.data[language], seq_len, self.seq_tracking[language], device=self.device)
+
+        # TODO: Prevent oversampling
 
         if self.eval:
-            return data, target
+            return data, target, language
         else:
-            return data, target, seq_len
+            return data, target, language, seq_len
 
     def get_total_iters(self, seq_len: int) -> int:
         """
@@ -434,9 +458,18 @@ class DataLoader:
         """ """
         return all([d['exhausted'] for _, d in self.seq_tracking.items()])
 
+    def __next__(self):
+        if self.is_exhausted():
+            raise StopIteration
+
+        return self.get_batch()
+
+    def __iter__(self):
+        return self
+
     def __len__(self) -> int:
         # TODO: This needs to be implemented
-        return 1
+        return self.get_total_iters(self.bptt)
 
 
 # end class Data
@@ -589,7 +622,7 @@ def batchify(data: torch.Tensor, batchsize: int) -> torch.Tensor:
     return data
 
 
-def get_batch(source: torch.Tensor, seq_len: int, tracking: dict, device='cpu') -> Tuple[torch.Tensor, torch.Tensor]:
+def create_batch(source: torch.Tensor, seq_len: int, tracking: dict, device='cpu') -> Tuple[torch.Tensor, torch.Tensor]:
     """
 
     Parameters
