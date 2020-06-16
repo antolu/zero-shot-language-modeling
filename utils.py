@@ -1,7 +1,10 @@
+from multiprocessing import Process, Manager, cpu_count
+from time import sleep
 from typing import Union
 
 import torch
 from torch.nn import CrossEntropyLoss, LSTM
+from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
 
@@ -41,6 +44,73 @@ class DotDict(dict):
     def __delitem__(self, key):
         super(DotDict, self).__delitem__(key)
         del self.__dict__[key]
+
+
+def multithread(function, args: list, max_active_processes: int) -> list:
+    """
+    Helper function to run multithread workflows.
+
+    Parameters
+    ----------
+    function : function handle
+        A function handle to multithread. This function handle can have arbitrary number
+        of arguments, but the argument signature needs to match that of the args parameter.
+    args : list
+        A list of dictionaries. Each dictionary corresponds to one execution of the function
+        handle. The dictionary keys need to correspond to the argument signature of the function handle.
+    max_active_processes : int
+        Maximum of concurrent processes to run. This should not exceed the maximum number of CPUs
+        available on the machine
+
+    Returns
+    -------
+     output: list
+        A list items, sorted according to the input argument `args`.
+
+    Raises
+    ------
+    ValueError
+        If the `max_active_processes` exceeds the maximum number of available processors.
+
+    """
+    if max_active_processes > cpu_count():
+        raise ValueError('Cannot have more active processes ({}) than available CPUs ({})'.format(max_active_processes, cpu_count()))
+
+    def mp_function(return_list: list, idx: int, *args):
+        output = function(*args)
+        return_list.append((idx, output))
+
+    with Manager() as manager:
+        return_list = manager.list()
+
+        processes = list()
+        for i, item in enumerate(args):
+            processes.append(Process(target=mp_function, args=(return_list, i, *args)))
+
+        active_process = set()
+
+        i = 0
+        pbar = tqdm(total=len(args))
+        while i < len(args) or len(active_process) > 0:
+
+            # Register a finished thread to allow for a new one to be created
+            for p in active_process.copy():
+                p.join(0)
+                if not p.is_alive():
+                    pbar.update(1)
+                    active_process.remove(p)
+
+            # Start a new process if there are available cores
+            if len(active_process) <= max_active_processes and i < len(args):
+                p = processes[i]
+                p.start()
+                active_process.add(p)
+                i += 1
+                continue
+
+            sleep(1e-2)
+
+        return [item[1] for item in sorted(return_list, key=lambda tup: tup[0])]
 
 
 def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
@@ -144,7 +214,6 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.optimizer,
 
 
 def detach(data: Union[torch.Tensor, list]):
-
     if isinstance(data, torch.Tensor):
         return data.detach()
     elif isinstance(data, tuple) or isinstance(data, list):
