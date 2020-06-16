@@ -19,6 +19,23 @@ from parser import get_args
 log = logging.getLogger(__name__)
 
 
+class SequenceSequencer:
+    def __init__(self, bptt: int, constant=False):
+        self.bptt = bptt
+        self.constant = constant
+
+    def sample(self):
+        if self.constant:
+            return self.bptt
+
+        bptt = self.bptt if torch.rand(1) < 0.95 else self.bptt / 2
+        distr = torch.distributions.normal.Normal(bptt, 5)
+        seq_len = max(5, int(distr.sample()))
+        seq_len = min(seq_len, 200)
+
+        return seq_len
+
+
 class Data:
     """ """
 
@@ -37,6 +54,8 @@ class Data:
         self.idx_counter = 0
         self.n_tokens = 0
 
+        assert path.exists(self.datadir)
+
     def load(self, rebuild: bool = False):
         """Loads the data into memory.
 
@@ -50,36 +69,74 @@ class Data:
 
         """
 
-        check_dir(self.datadir)
+        mapping_filename = path.join(self.datadir, self.character_mappings_name)
+        if path.exists(mapping_filename):
+            mapping_filename = self.__load_mapping()
 
-        mapping_exists = self.__mapping_exists()
+        self.__create_cache()
 
-        if not mapping_exists:
-            mapping_filename = path.join(self.datadir, self.character_mappings_name)
-        else:
-            mapping_filename = self.load_mapping()
+        if not path.exists(mapping_filename) or rebuild:
+            self.get_split('train', use_cached=False)
+            self.get_split('valid', use_cached=False)
+            self.get_split('test', use_cached=False)
+            self.__write_mapping(mapping_filename)
 
-        self.__process_data(rebuild_cache=rebuild)
+    def __create_cache(self):
+        log.info('Reading file paths...')
 
-        if not mapping_exists or rebuild:
-            self.write_mapping(mapping_filename)
+        datadir = path.join(self.datadir, 'bibles_{}'.format(self.dataset))
+        languages = listdir(datadir)
 
-    def __process_data(self, rebuild_cache: bool = True):
-        """Process the dataset, one language at a time.
-        :return: None
+        data = dict()
+        for language in languages:
+            language_dir = path.join(datadir, language)
+            data[language] = dict()
 
-        Parameters
-        ----------
-        rebuild_cache: bool :
-             (Default value = True)
+            for split_path in glob(path.join(language_dir, '*.txt')):
+                split = path.splitext(path.basename(split_path))[0]      # The split name is the file basename
+                savepath = path.splitext(split_path)[0] + 'pt'           # Save a torch file to the same directory
+
+                data[language][split] = {
+                    'language': language,
+                    'split': split,
+                    'txt_path': split_path,
+                    'pth_path': savepath,
+                }
+
+        self.data = data
+
+    def get_available_languages(self) -> list:
+        """Get which languages exists for the loaded data.
+        :return: A list of languages available in the dataset.
 
         Returns
         -------
+        KeysView:
+            An iterable that contains all the available languages in the dataset
 
         """
+        return list(self.data.keys())
 
-        log.info('{} {}'.format('Creating data tensors.' if rebuild_cache else 'Loading data tensor.',
-                                'Creating mapping too.' if self.__mapping_exists and rebuild_cache else ''))
+    def get_split(self, split: str, languages: Union[str, list] = 'all', use_cached=True) -> Dict:
+        """Returns the dataset split based on the argument `split`
+
+        Parameters
+        ----------
+        split : str
+            Valid splits are train, validation, and test
+        languages : str or list
+            The language(s) to get a dataset split for
+             (Default value = 'all')
+        use_cached: bool
+            Use precalculated data tensors (True), or rebuild the relevant tensors.
+            (Default value = True)
+
+        Returns
+        -------
+        output: dict
+            A dictionary with languages as keys, and the torch tensors as values
+
+        """
 
         def add_to_tensor(char: str, idx: int, tensor: torch.Tensor):
             """Helper function to assign data to PyTorch tensor
@@ -127,37 +184,43 @@ class Data:
 
             add_to_tensor(char, idx, tensor)
 
+        if languages == 'all':
+            languages = self.data.keys()
+        elif isinstance(languages, str):
+            if languages not in self.data:
+                raise ValueError(f'Language {languages} does not exist in memory.')
+            languages = [languages]
+        elif isinstance(languages, list):
+            for lang in languages:
+                if lang not in self.data:
+                    raise ValueError(f'Language {lang} does not exist in memory.')
+                if split not in self.data[lang]:
+                    raise ValueError(f'Split {split} does not exist for language {lang}')
+        else:
+            raise ValueError(f'Language {languages} does not exist in memory.')
+
         # Speeds up computations significantly instead of running if/else statements for each iteration.
-        processor = add_to_tensor if self.__mapping_exists() else add_to_index
-
-        datadir = path.join(self.datadir, 'bibles_{}'.format(self.dataset))
-        languages = listdir(datadir)
-
-        to_process = list()
-        for language in languages:
-            language_dir = path.join(datadir, language)
-            self.data[language] = dict()
-
-            for split_path in glob(path.join(language_dir, '*.txt')):
-                split = path.splitext(path.basename(split_path))[0]
-                savepath = path.splitext(split_path)[0] + 'pt'
-
-                to_process.append({
-                    'language': language,
-                    'split': split,
-                    'load_path': split_path,
-                    'save_path': savepath,
-                })
+        processor = add_to_tensor if use_cached else add_to_index
 
         def process_split(data: dict, return_list):
             log.debug('Preprocessing language and split {}/{}'.format(data['language'], data['split']))
 
-            split, dataset = _process_language_data(data['load_path'], processor, data['language'])
-            save_tensor(data['save_path'], dataset)
+            split, dataset = _process_language_data(data['load_path'], processor)
+            torch.save(data['save_path'], dataset)
 
-            return_list.append(dataset)
+            output = data.copy()
+            output[data] = dataset
 
-        if rebuild_cache:
+            return_list.append(output)
+
+        # Prep to load dataset into memory
+        to_process = list()
+        for lang in languages:
+            to_process.append(self.data[lang][split])
+
+        log.info(f'Reading data languages {languages} into memory with split {split}')
+        # Rebuild data tensors or load cached ones
+        if not use_cached:
             with Manager() as manager:
                 return_list = manager.list()
 
@@ -174,87 +237,74 @@ class Data:
                 pbar = tqdm(total=len(to_process))
                 while i < len(to_process) or len(active_process) > 0:
 
+                    # Register a finished thread to allow for a new one to be created
                     for p in active_process.copy():
                         p.join(0)
                         if not p.is_alive():
                             pbar.update(1)
                             active_process.remove(p)
 
+                    # Start a new process if there are available cores
                     if len(active_process) <= max_active_processes and i < len(to_process):
                         p = processes[i]
                         p.start()
                         active_process.add(p)
                         i += 1
+                        continue
 
                     sleep(1e-2)
 
-                for dataset in return_list:
-                    log.info(dataset.__dict__)
-                    self.data[dataset.language][dataset.split] = dataset.data
+                return {output['langauge']: output['data'] for output in return_list}
         else:
             log.info('Loading preprocessed data tensors')
             pbar = tqdm(to_process)
+
+            output = dict()
             for item in pbar:
-                split, dataset = load_tensor(item['load_path'])
-                self.data[dataset.language][split] = dataset.data
 
-        log.info('Creating character to index mapping')
-        for char in self.character_to_idx:
-            self.idx_to_character.append(char)
+                tensor = torch.load(item['load_path'])
+                output[item['split']] = tensor
 
-        self.n_tokens = self.idx_counter
+            return output
 
-        log.info('Done.\nData loading complete.')
-
-    def get_available_languages(self) -> KeysView:
-        """Get which languages exists for the loaded data.
-        :return: A list of languages available in the dataset.
-
-        Returns
-        -------
-        KeysView:
-            An iterable that contains all the available languages in the dataset
-
+    def make_dataset(self, split: str, languages: Union[str, list] = 'all', batchsize: int = 1, **kwargs) -> Dict:
         """
-        return self.data.keys()
-
-    def get_split(self, split: str, language: Union[str, list] = 'all') -> Dict:
-        """Returns the dataset split based on the argument `split`
+        Constructs datasets based on the passed parameters. All the processed sts will be wrapped into a dictionary
+        that can be fed to a data loader for efficient data loading. The data is made into batches in the same process
 
         Parameters
         ----------
         split : str
-            Valid splits are train, validation, and test
-        language : str
-            The language to get a dataset for
-             (Default value = 'all')
-        split: str :
+            Which split to find data for
+        languages : str or list
+            Which language(s) to find data for
+            (Default value = 1)
+        batchsize : int
+            How big batches we are using.
+        kwargs :
+            Everything here is passed to the Dataset creations
 
         Returns
         -------
-        torch.utils.data.Dataset
-            A torch.utils.data.Dataset object with the data for the specified split.
+        output: dict
+            A dictionary containing {language: Dataset}
 
         """
+        data = self.get_split(split, languages)
 
-        if language == 'all':
-            output = {lan: splits[split].data if split in splits else None for lan, splits in self.data.items()}
+        batchified_data = dict()
+        for lang, d in data.items():
+            batchified_data[lang] = batchify(d, batchsize)
 
-            return output
-        elif isinstance(language, list):
-            raise NotImplementedError
+        output = dict()
+        for lang, d in batchified_data.items():
+            output[lang] = Dataset(split, lang, d, batchsize=batchsize, **kwargs)
 
-        return {language: self.data[language][split].data}
+        return output
 
-    def load_mapping(self) -> str:
-        """Read the character mapping file from file and saves the mapping in dictionaries.
-        :return: The path to the mapping file.
-
-        Returns
-        -------
-        str
-            The absolute path to the mapping file
-
+    def __load_mapping(self):
+        """
+            Read the character mapping file from file and saves the mapping in dictionaries.
         """
         mapping_file = path.join(self.datadir, self.character_mappings_name)
 
@@ -266,9 +316,7 @@ class Data:
 
         log.info('Processed mapping file {}.'.format(mapping_file))
 
-        return mapping_file
-
-    def write_mapping(self, mapping_file: str):
+    def __write_mapping(self, mapping_file: str):
         """Writes the character mapping to file
 
         Parameters
@@ -281,26 +329,11 @@ class Data:
             for ch, idx in self.character_to_idx.items():
                 print('{} {}'.format(ch, idx), file=f)
 
-    def __mapping_exists(self) -> bool:
-        """Determines whether a character mapping already exists.
-        :return: Boolean whether the mapping exists.
-
-        Returns
-        -------
-        bool
-            Whether the character mapping file exists or not
-
-        """
-        mapping_file = path.join(self.datadir, self.character_mappings_name)
-
-        return path.exists(mapping_file)
-
-    def __len__(self) -> int:
-        return len(self.data)
+# end class Data
 
 
-class Dataset(torch_Dataset):
-    def __init__(self, split: str, language: str, data: torch.Tensor = None):
+class Dataset:
+    def __init__(self, split: str, language: str, data: torch.Tensor, bptt:int = 125, batchsize: int = 1, eval: bool = False, device: Union[torch.device, str] = 'cpu'):
         """Helper class to use with PyTorch data loader
 
         Parameters
@@ -316,126 +349,120 @@ class Dataset(torch_Dataset):
         self.split = split
         self.language = language
         self.data = data
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, item) -> torch.Tensor:
-        return self.data[item]
-
-
-class Constant:
-    """ """
-
-    def __init__(self, constant: int):
-        self.constant = constant
-
-    def sample(self) -> int:
-        """ """
-        return self.constant
-
-
-class SequenceSequencer:
-    def __init__(self, bptt: int, constant=False):
+        self.device = device
         self.bptt = bptt
-        self.constant = constant
+        self.batchsize = batchsize
 
-    def sample(self):
-        if self.constant:
-            return self.bptt
+        self.seq_len = SequenceSequencer(bptt, constant=eval)
 
-        bptt = self.bptt if torch.rand(1) < 0.95 else self.bptt / 2
-        distr = torch.normal(bptt, 5)
-        seq_len = max(5, int(distr.sample()))
-        seq_len = min(seq_len, 200)
+        self.tracking = 0
+        self.exhausted = False
 
-        return seq_len
+    def gen(self):
 
+        while not self.exhausted:
+            seq_len = self.seq_len.sample()
+
+            data, target = create_batch(self.data, seq_len, self.tracking, device=self.device)
+
+            if seq_len + self.tracking >= len(self.data) - 1:
+                self.exhausted = True
+                self.tracking = len(self.data) - 1
+            else:
+                self.tracking += seq_len
+
+            yield data, target, seq_len
+
+        self.exhausted = False
+        self.tracking = 0
+
+        raise StopIteration
+
+    def __len__(self):
+        return self.batchsize * round(self.data.size(1) / self.bptt)
+
+
+# end class Dataset
+    
 
 class DataLoader:
     """ """
 
-    def __init__(self, data: dict, batchsize: int, bptt=125, lang_sampler=None, idx_to_language=None,
-                 device: Union[str, torch.device] = 'cpu', oversample: bool = True, eval: bool = True):
+    def __init__(self, data: dict, idx_to_language=None, lang_sampler=None, device: Union[str, torch.device] = 'cpu', oversample: bool = True, eval: bool = True):
         self.eval = eval
         self.data = data
-        self.seq_len = SequenceSequencer(bptt, constant=self.eval)
-        self.bptt = bptt
         self.lang_sampler = get_sampling_probabilities(self.data, 1.0) if lang_sampler is None else lang_sampler
-        self.batchsize = batchsize
         self.device = device
         self.oversample = oversample
         self.total_iters = None
 
         if idx_to_language is None:
             self.idx_to_language = list()
-            for language in self.data:
+            for language in self.data.keys():
                 self.idx_to_language.append(language)
 
         # Used for eval
         self.language_iter = iter(self.idx_to_language)
         self.current_language = next(self.language_iter)
 
-        self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
+        self.bptt = self.data.items()[0][1].bptt
+        if not all([lang_data.bptt == self.bptt for _, lang_data in self.data.items()]):
+            log.warn('Not all internal datasets have the same bptt value')
 
-        self.__make_batches()
+        self.batchsize = self.data.items()[0][1].batchsize
+        if not all([lang_data.batchsize == self.batchsize for _, lang_data in self.data.items()]):
+            raise ValueError('Not all internal datasets have the same batch size')
 
-    def __make_batches(self):
-        dataset = dict()
-        for language, data in self.data.items():
-            dataset[language] = batchify(data, self.batchsize)
-        self.data = dataset
+    def gen(self) -> Tuple[torch.Tensor, torch.Tensor, int, str]:
+        """
+        Generator function. Gets the next batch in line. If in eval mode, the loader will
+        go through the available languages sequentially, otherwise a language will be sampled
+        with replacement. When a language runs out of data, the probability distribution will be
+        changed to reflect this.
 
-    def __get_language(self):
-        language_idx = self.lang_sampler.sample()
-        language = self.idx_to_language[language_idx]
+        Returns
+        -------
+        data, targets, seq_len, language: Tuple[torch.Tensor, torch.Tensor, int, str]
+            Returns the data, its targets, the sequence length, and the language
 
-        return language
+        Raises
+        ------
+        StopIteration
+            When we run out of data
 
-    def reset(self):
-        """ """
-        self.seq_tracking = DotDict({lan: {'idx': d.idx, 'exhausted': False} for lan, d in self.seq_tracking.items()})
+        """
+        if not self.eval:
+            # Sample languages to get data for
+            while True:
+                language_idx = self.lang_sampler.sample()
+                language = self.idx_to_language[language_idx]
+                language_data = self.data[language]
 
-    def reset_all(self):
-        """ """
-        self.seq_tracking = DotDict({lan: {'idx': 0, 'exhausted': False} for lan in self.data.keys()})
-
-    def get_batch(self) -> Union[Tuple[torch.Tensor, torch.Tensor, str], Tuple[torch.Tensor, torch.Tensor, str, int]]:
-        """"""
-
-        # If in evaluation mode, do not sample language, but run through everything sequentially`
-        if self.eval:
-            if not self.seq_tracking[self.current_language]['exhausted']:
-                language = self.current_language
-            else:
-                self.current_language = next(self.language_iter)
-                language = self.current_language
+                # prevent too big or too small seq_lens
+                try:
+                    yield next(language_data), language
+                except StopIteration:
+                    # TODO: modify the language proability distribution
+                    pass
         else:
-            language = self.__get_language()
+            # Walk through languages sequentially
+            language_iter = iter(self.language_iter)
+            language = next(language_iter)
+            while True:
+                language = next(language_iter)
+                language_data = self.data[language]
 
-        # prevent too big or too small seq_lens
-        seq_len = self.seq_len.sample()
-        data, target = create_batch(self.data[language], seq_len, self.seq_tracking[language], device=self.device)
+                try:
+                    yield next(language_data), language
+                except StopIteration:
+                    language = next(language_iter)
 
-        # TODO: Prevent oversampling
-
-        if self.eval:
-            return data, target, language
-        else:
-            return data, target, language, seq_len
-
-    def get_total_iters(self, seq_len: int) -> int:
+    def get_total_iters(self) -> int:
         """
         Computes the approximate number of iterations to go through the entire dataset. Observer that
         this might be a rough estimate if the sequence length and language to use is sampled from a
         nonuniform distribution with replacement. Therefore this number should be regarded as a naive
         approximation intended to give an estimate of the computational time.
-
-        Parameters
-        ----------
-        seq_len: int
-            The average sequence length
-            
 
         Returns
         -------
@@ -446,7 +473,7 @@ class DataLoader:
         if not self.total_iters:
             self.total_iters = 0
             for language, data in self.data.items():
-                self.total_iters += self.batchsize * round(data.size(1) / seq_len)
+                self.total_iters += len(data)
 
         return self.total_iters
 
@@ -454,25 +481,11 @@ class DataLoader:
         """ """
         raise NotImplementedError()
 
-    def is_exhausted(self) -> bool:
-        """ """
-        return all([d['exhausted'] for _, d in self.seq_tracking.items()])
-
-    def __next__(self):
-        if self.is_exhausted():
-            raise StopIteration
-
-        return self.get_batch()
-
-    def __iter__(self):
-        return self
-
     def __len__(self) -> int:
-        # TODO: This needs to be implemented
-        return self.get_total_iters(self.bptt)
+        return self.get_total_iters()
 
 
-# end class Data
+# end class DataLoader
 
 
 def _read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')) -> Tuple[str, list, int]:
@@ -510,7 +523,7 @@ def _read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')) -> Tupl
     return split, data, n_tokens
 
 
-def _process_language_data(filepath, processor, language) -> Tuple[str, Dataset]:
+def _process_language_data(filepath, processor) -> torch.Tensor:
     """Process a file, wraps read_raw_data and returns the split name and actual dataset.
 
     Parameters
@@ -524,14 +537,13 @@ def _process_language_data(filepath, processor, language) -> Tuple[str, Dataset]
 
     Returns
     -------
-    (str, Dataset)
-        Split name [str], dataset [Dataset]
+    tensor: torch.Tensor
+        The torch data tensor of type long
 
     """
 
     split, split_data, n_tokens = _read_raw_data(filepath)
 
-    dataset = Dataset(split, language)
     tensor = torch.zeros(n_tokens, dtype=torch.long)
     i = 0
 
@@ -541,48 +553,7 @@ def _process_language_data(filepath, processor, language) -> Tuple[str, Dataset]
             processor(char, i, tensor)
             i += 1
 
-    dataset.data = tensor
-
-    return split, dataset
-
-
-def check_dir(dir: str):
-    """Checks if data directories exists. Will exit with code 1 if they do not.
-    :return: None
-
-    Parameters
-    ----------
-    dir: str :
-        
-    """
-    if not path.exists(dir):
-        log.error('Path {} does not exist'.format(dir))
-        exit(1)
-    if not path.isdir(dir):
-        log.error('{} is not a directory'.format(dir))
-        exit(1)
-
-
-def load_tensor(filepath: str) -> Tuple[str, Dataset]:
-    """
-
-    Parameters
-    ----------
-    filepath: str
-        Path to the file to load
-        
-    Returns
-    -------
-    (Dataset, str)
-        A Dataset object wrapping the tensor, and the split inferred from the filename
-    """
-    split = path.splitext(path.basename(filepath))[0]
-    language = path.split(filepath)[-2]
-
-    tensor = torch.load(filepath)
-
-    dataset = Dataset(split, language, tensor)
-    return split, dataset
+    return tensor
 
 
 def save_tensor(filepath: str, data: Dataset):
@@ -622,7 +593,7 @@ def batchify(data: torch.Tensor, batchsize: int) -> torch.Tensor:
     return data
 
 
-def create_batch(source: torch.Tensor, seq_len: int, tracking: dict, device='cpu') -> Tuple[torch.Tensor, torch.Tensor]:
+def create_batch(source: torch.Tensor, seq_len: int, current_idx: int, device='cpu') -> Tuple[torch.Tensor, torch.Tensor]:
     """
 
     Parameters
@@ -644,15 +615,10 @@ def create_batch(source: torch.Tensor, seq_len: int, tracking: dict, device='cpu
     """
 
     # If we're out of data, take only what we can
-    seq_len = min(seq_len, len(source) - 1 - tracking.idx)
+    seq_len = min(seq_len, len(source) - 1 - current_idx)
 
-    data = source[tracking.idx:tracking.idx + seq_len].to(device)
-    target = source[tracking.idx + 1:tracking.idx + 1 + seq_len].view(-1).to(device)
-
-    tracking.idx += seq_len
-    if tracking.idx >= len(source) - 1:
-        tracking.idx = 0
-        tracking.exhausted = True
+    data = source[current_idx:current_idx + seq_len].to(device)
+    target = source[current_idx + 1:current_idx + 1 + seq_len].view(-1).to(device)
 
     return data, target
 

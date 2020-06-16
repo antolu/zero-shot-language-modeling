@@ -15,7 +15,7 @@ from torch.optim import Adam
 from bayesian import BoringPrior, EWC
 from criterion import SplitCrossEntropyLoss
 from data import Data, DataLoader, get_sampling_probabilities
-from engine import train, evaluate
+from engine import train, evaluate, refine
 from model import LSTM
 from parser import get_args
 from utils import get_checkpoint, save_model, load_model, DotDict
@@ -56,16 +56,17 @@ def main():
     data = Data(args.datadir, args.dataset)
     data.load(args.rebuild)
 
-    # TODO: only load data tensors upon calling get_split, else only save the paths in memory
-    train_set = data.get_split('train')
-    val_set = data.get_split('valid')  # TODO: use args.dev_lang to get validation set
-    test_set = data.get_split('test')
+    train_set = data.make_dataset('train', batchsize=args.batchsize, bptt=args.bptt, device=device)
+    val_set = data.make_dataset('valid', batchsize=args.val_batchsize, bptt=args.bptt, eval=True, device=device)  # TODO: use args.dev_lang to get validation set
+    test_set = data.make_dataset('test', batchsize=args.test_batchsize, bptt=args.bptt, eval=True, device=device)
 
     train_language_distr = get_sampling_probabilities(train_set, 0.8)
-    train_loader = DataLoader(train_set, args.batchsize, bptt=args.bptt,
-                              lang_sampler=train_language_distr, device=device, eval=False)
-    val_loader = DataLoader(val_set, args.valid_batchsize, device=device, eval=True)
-    test_loader = DataLoader(test_set, args.test_batchsize, device=device, eval=True)
+    train_loader = DataLoader(train_set, lang_sampler=train_language_distr, device=device, eval=False)
+    val_loader = DataLoader(val_set, device=device, eval=True)
+    test_loader = DataLoader(test_set, device=device, eval=True)
+
+    if args.refine:
+        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize, bptt=args.bptt, eval=True, device=device)
 
     n_token = len(data.idx_to_character)
 
@@ -179,7 +180,7 @@ def main():
 
             save_model(path.join(args.dir_model,
                                  '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
-                       get_checkpoint(epoch))
+                       get_checkpoint(epoch, **parameters))
     elif args.test:
         test()
 
@@ -189,15 +190,26 @@ def main():
 
     # If use UNIV, calculate informed prior, else use boring prior
     if args.laplace:
-        laplace_loader = DataLoader(train_set, args.batchsize, bptt=100, device=device, eval=False)
+        laplace_set = data.make_dataset('test', batchsize=args.batchsize, bptt=100, device=device)
+        laplace_loader = DataLoader(laplace_set, eval=False)
         ewc = EWC(model, loss_function, laplace_loader)
     else:
         ewc = BoringPrior()
 
+    best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
+
     # Refine on 100 samples on each target
     if args.refine:
-        # TODO: implement laplacian approximation
-        raise NotImplementedError
+        # reset learning rate
+        optimizer.param_groups[0]['lr'] = args.lr
+
+        for lang, lang_data in tqdm.tqdm(refine_set.items()):
+            load_model(best_model, **parameters)
+
+            for epoch in range(1, args.refine_epochs + 1):
+                refine(lang, lang_data, **parameters, importance=10000 if args.laplace else 1e-5)
+                if epoch and epoch % 5 == 5:
+                    evaluate(test_loader, model, loss_function)
 
 
 if __name__ == "__main__":
