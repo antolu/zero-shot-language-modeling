@@ -8,14 +8,16 @@ from tqdm import tqdm
 
 from bayesian import EWC
 from criterion import SplitCrossEntropyLoss
-from data import DataLoader, Dataset
+from data import DataLoader
 from model import LSTM
 from utils import detach
 
 
 def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-          use_apex=False, amp=None, clip=None, parameters: list = None, alpha: float = 0., beta: float = 0., **kwargs):
+          use_apex=False, amp=None, clip=None, parameters: list = None, bptt: int = 125, alpha: float = 0.,
+          beta: float = 0., **kwargs):
+
     total_loss = 0
     hidden = model.init_hidden(dataloader.batchsize)
 
@@ -25,11 +27,11 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
     data_spec_avg = data_spec_count / len(dataloader.data.items())
     data_spec_lrweights = dict([(l, data_spec_avg / len(ds)) for l, ds in dataloader.data.items()])
 
-    with tqdm(total=len(dataloader)) as pbar:
-        for data, targets, seq_len, lang in dataloader.gen():
+    with tqdm(dataloader) as pbar:
+        for data, targets, seq_len, lang in pbar:
 
             lr2 = optimizer.param_groups[0]['lr']
-            optimizer.param_groups[0]['lr'] = lr2 * seq_len / dataloader.bptt * data_spec_lrweights[lang]
+            optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt * data_spec_lrweights[lang]
 
             model.train()
             hidden = detach(hidden)
@@ -87,8 +89,8 @@ def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCros
 
     batch = 0
 
-    with tqdm(total=len(dataloader)) as pbar:
-        for data, targets, seq_len, lang in dataloader.gen():
+    with tqdm(dataloader) as pbar:
+        for data, targets, seq_len, lang in pbar:
             if only_l and only_l != lang:
                 continue
 
@@ -110,14 +112,17 @@ def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCros
     return total_loss / len(languages)
 
 
-def refine(lang, data_spec: Dataset, model: LSTM, optimizer: torch.optim, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], ewc: EWC, bptt: int, clip: int, parameters: list, use_apex: bool = False, amp=None, alpha: float = 0, beta: float = 0, importance: int = 100000):
-    with tqdm(data_spec.gen(), total=len(data_spec)) as pbar:
+def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim,
+           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], ewc: EWC, bptt: int, clip: int,
+           parameters: list, use_apex: bool = False, amp=None, alpha: float = 0, beta: float = 0,
+           importance: int = 100000):
+    with tqdm(dataloader) as pbar:
         for data, targets, lang, seq_len in pbar:
 
             lr2 = optimizer.param_groups[0]['lr']
-            optimizer.param_groups[0]['lr'] = lr2 * seq_len / data_spec.bptt
+            optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt
             model.train()
-            hidden = model.init_hidden(data_spec.batchsize)
+            hidden = model.init_hidden(dataloader.batchsize)
             optimizer.zero_grad()
 
             output, hidden, rnn_hs, dropped_rnn_hs, loss_typ = model(data, hidden, lang, return_h=True)
@@ -150,4 +155,5 @@ def refine(lang, data_spec: Dataset, model: LSTM, optimizer: torch.optim, loss_f
 
             optimizer.param_groups[0]['lr'] = lr2
 
-            pbar.set_description('Loss {:5.2f} | bpc {:9.3f} | laplace {} |'.format(loss, loss / math.log(2), laplace.item()))
+            pbar.set_description(
+                'Loss {:5.2f} | bpc {:9.3f} | laplace {} |'.format(loss, loss / math.log(2), laplace.item()))

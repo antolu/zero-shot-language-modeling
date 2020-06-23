@@ -14,7 +14,7 @@ from torch.optim import Adam
 
 from bayesian import BoringPrior, EWC
 from criterion import SplitCrossEntropyLoss
-from data import Data, DataLoader, get_sampling_probabilities
+from data import Data, DataLoader, get_sampling_probabilities, make_batches
 from engine import train, evaluate, refine
 from model import LSTM
 from parser import get_args
@@ -56,17 +56,17 @@ def main():
     data = Data(args.datadir, args.dataset)
     data.load(args.rebuild)
 
-    train_set = data.make_dataset('train', batchsize=args.batchsize, bptt=args.bptt, device=device)
-    val_set = data.make_dataset('valid', batchsize=args.val_batchsize, bptt=args.bptt, eval=True, device=device)  # TODO: use args.dev_lang to get validation set
-    test_set = data.make_dataset('test', batchsize=args.test_batchsize, bptt=args.bptt, eval=True, device=device)
+    train_set = data.make_dataset('train', batchsize=args.batchsize)
+    val_set = data.make_dataset('valid', batchsize=args.val_batchsize)  # TODO: use args.dev_lang to get validation set
+    test_set = data.make_dataset('test', batchsize=args.test_batchsize)
 
     train_language_distr = get_sampling_probabilities(train_set, 0.8)
-    train_loader = DataLoader(train_set, lang_sampler=train_language_distr, device=device, eval=False)
-    val_loader = DataLoader(val_set, device=device, eval=True)
-    test_loader = DataLoader(test_set, device=device, eval=True)
+    # train_loader = DataLoader(train_set, lang_probabilities=train_language_distr, device=device, eval=False)
+    val_loader = DataLoader(val_set, make_batches(val_set, batchsize=args.val_batchsize, bptt=args.bptt, eval=True),  device=device)
+    test_loader = DataLoader(test_set, make_batches(test_set, batchsize=args.test_batchsize, bptt=args.bptt, eval=True), device=device)
 
     if args.refine:
-        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize, bptt=args.bptt, eval=True, device=device)
+        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize)
 
     n_token = len(data.idx_to_character)
 
@@ -142,6 +142,8 @@ def main():
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1)
             for epoch in pbar:
+                batch_config = make_batches(train_set, lang_probabilities=train_language_distr, batchsize=args.batchsize, bptt=args.bptt)
+                train_loader = DataLoader(train_set, batch_config, device=device)
                 train(train_loader, **parameters)
 
                 val_loss = evaluate(val_loader, **parameters)
@@ -190,8 +192,8 @@ def main():
 
     # If use UNIV, calculate informed prior, else use boring prior
     if args.laplace:
-        laplace_set = data.make_dataset('test', batchsize=args.batchsize, bptt=100, device=device)
-        laplace_loader = DataLoader(laplace_set, eval=False)
+        laplace_set = data.make_dataset('train', batchsize=args.batchsize)
+        laplace_loader = DataLoader(laplace_set, make_batches(laplace_set, batchsize=args.batchsize, bptt=100), device=device)
         ewc = EWC(model, loss_function, laplace_loader)
     else:
         ewc = BoringPrior()
@@ -204,10 +206,12 @@ def main():
         optimizer.param_groups[0]['lr'] = args.lr
 
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
+            refine_data = {lang: lang_data}
             load_model(best_model, **parameters)
 
             for epoch in range(1, args.refine_epochs + 1):
-                refine(lang, lang_data, **parameters, importance=10000 if args.laplace else 1e-5)
+                refine_dataloader = DataLoader(refine_data, make_batches(refine_data, batchsize=args.val_batchsize, bptt=args.bptt), device=device)
+                refine(refine_dataloader, **parameters, importance=10000 if args.laplace else 1e-5)
                 if epoch and epoch % 5 == 5:
                     evaluate(test_loader, model, loss_function)
 

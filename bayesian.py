@@ -27,13 +27,14 @@ class BoringPrior:
 
 class EWC:
     def __init__(self, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                 dataloader: DataLoader, use_apex: bool = False, amp=None):
+                 dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.optimizer = None):
 
         self.model = model
         self.loss_function = loss_function
         self.dataloader = dataloader
         self.use_apex = use_apex
         self.amp = amp
+        self.optimizer = optimizer
 
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
         self._means = {}
@@ -57,14 +58,19 @@ class EWC:
                 print(m)
         batch = 0
         log.info("Starting calculation of Fisher's matrix")
-        with tqdm(total=len(self.dataloader)) as pbar:
-            for inputs, targets, lang, seq_len in self.dataloader:
+        with tqdm(self.dataloader) as pbar:
+            for inputs, targets, seq_len, lang in self.dataloader:
                 hidden = self.model.init_hidden(self.dataloader.batchsize)
                 self.model.zero_grad()
                 output, hidden, loss_typ = self.model(inputs, hidden, lang)
 
                 loss = self.loss_function(self.model.decoder.weight, self.model.decoder.bias, output, targets)
-                loss.backward()
+                if self.use_apex and self.optimizer:
+                    with self.amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    loss.backward()
+
                 batch += 1
 
                 pbar.update(1)

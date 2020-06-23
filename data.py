@@ -4,13 +4,12 @@ from glob import glob
 from os import path, listdir
 from sys import exit
 from pprint import pformat
-from typing import Tuple, Union, List, KeysView, Dict
+from typing import Tuple, Union, List, Dict
 from time import sleep
 from multiprocessing import cpu_count, Process, Manager
 
 import torch
 from torch.distributions.categorical import Categorical
-from torch.utils.data import Dataset as torch_Dataset
 from tqdm import tqdm
 
 from utils import DotDict
@@ -93,8 +92,8 @@ class Data:
             data[language] = dict()
 
             for split_path in glob(path.join(language_dir, '*.txt')):
-                split = path.splitext(path.basename(split_path))[0]      # The split name is the file basename
-                savepath = path.splitext(split_path)[0] + 'pt'           # Save a torch file to the same directory
+                split = path.splitext(path.basename(split_path))[0]  # The split name is the file basename
+                savepath = path.splitext(split_path)[0] + 'pt'  # Save a torch file to the same directory
 
                 data[language][split] = {
                     'language': language,
@@ -261,13 +260,12 @@ class Data:
 
             output = dict()
             for item in pbar:
-
                 tensor = torch.load(item['load_path'])
                 output[item['split']] = tensor
 
             return output
 
-    def make_dataset(self, split: str, languages: Union[str, list] = 'all', batchsize: int = 1, **kwargs) -> Dict:
+    def make_dataset(self, split: str, languages: Union[str, list] = 'all', batchsize: int = 1) -> Dict:
         """
         Constructs datasets based on the passed parameters. All the processed sts will be wrapped into a dictionary
         that can be fed to a data loader for efficient data loading. The data is made into batches in the same process
@@ -281,8 +279,6 @@ class Data:
             (Default value = 1)
         batchsize : int
             How big batches we are using.
-        kwargs :
-            Everything here is passed to the Dataset creations
 
         Returns
         -------
@@ -292,13 +288,9 @@ class Data:
         """
         data = self.get_split(split, languages)
 
-        batchified_data = dict()
-        for lang, d in data.items():
-            batchified_data[lang] = batchify(d, batchsize)
-
         output = dict()
-        for lang, d in batchified_data.items():
-            output[lang] = Dataset(split, lang, d, batchsize=batchsize, **kwargs)
+        for lang, d in data.items():
+            output[lang] = batchify(d, batchsize)
 
         return output
 
@@ -329,164 +321,65 @@ class Data:
             for ch, idx in self.character_to_idx.items():
                 print('{} {}'.format(ch, idx), file=f)
 
+
 # end class Data
 
+class DataLoader:
+    """
+    Helper class to be able to iterate through a dataset. This should later be replaced with the build in PyTorch
+    Dataloader.
 
-class Dataset:
-    def __init__(self, split: str, language: str, data: torch.Tensor, bptt:int = 125, batchsize: int = 1, eval: bool = False, device: Union[torch.device, str] = 'cpu'):
-        """Helper class to use with PyTorch data loader
+    This class requires that the user has already constructed a batch configuration by running `make_batches`.
 
+    See Also
+    --------
+    make_batches
+    """
+
+    def __init__(self, data: Dict, batch_config: List[Dict], device: Union[str, torch.device] = 'cpu'):
+        """
         Parameters
         ----------
-        split : str
-            Which split this dataset corresponds to: train/validation/test
-        language : str
-            Which language this dataset corresponds to
-        data : torch.Tensor
-            The data tensor to wrap
-
+        data : dict
+            A dictionary formatted as (language: str, data: torch.Tensor) that contains the batchfied data.
+        batch_config : list
+            A dictionary returned by `make_batches`.
+        device : str or torch.device
         """
-        self.split = split
-        self.language = language
+
         self.data = data
         self.device = device
-        self.bptt = bptt
-        self.batchsize = batchsize
+        self.batch_config = batch_config
+        self.batchsize = list(data.items())[0][1].size(0)
 
-        self.seq_len = SequenceSequencer(bptt, constant=eval)
-
-        self.tracking = 0
-        self.exhausted = False
-
-    def gen(self):
-
-        while not self.exhausted:
-            seq_len = self.seq_len.sample()
-
-            data, target = create_batch(self.data, seq_len, self.tracking, device=self.device)
-
-            if seq_len + self.tracking >= len(self.data) - 1:
-                self.exhausted = True
-                self.tracking = len(self.data) - 1
-            else:
-                self.tracking += seq_len
-
-            yield data, target, seq_len
-
-        self.exhausted = False
-        self.tracking = 0
-
-        raise StopIteration
-
-    def __len__(self):
-        return self.batchsize * round(self.data.size(1) / self.bptt)
-
-
-# end class Dataset
-    
-
-class DataLoader:
-    """ """
-
-    def __init__(self, data: dict, idx_to_language=None, lang_sampler=None, device: Union[str, torch.device] = 'cpu', oversample: bool = True, eval: bool = True):
-        self.eval = eval
-        self.data = data
-        self.lang_sampler = get_sampling_probabilities(self.data, 1.0) if lang_sampler is None else lang_sampler
-        self.device = device
-        self.oversample = oversample
-        self.total_iters = None
-
-        if idx_to_language is None:
-            self.idx_to_language = list()
-            for language in self.data.keys():
-                self.idx_to_language.append(language)
-
-        # Used for eval
-        self.language_iter = iter(self.idx_to_language)
-        self.current_language = next(self.language_iter)
-
-        self.bptt = self.data.items()[0][1].bptt
-        if not all([lang_data.bptt == self.bptt for _, lang_data in self.data.items()]):
-            log.warn('Not all internal datasets have the same bptt value')
-
-        self.batchsize = self.data.items()[0][1].batchsize
-        if not all([lang_data.batchsize == self.batchsize for _, lang_data in self.data.items()]):
-            raise ValueError('Not all internal datasets have the same batch size')
-
-    def gen(self) -> Tuple[torch.Tensor, torch.Tensor, int, str]:
-        """
-        Generator function. Gets the next batch in line. If in eval mode, the loader will
-        go through the available languages sequentially, otherwise a language will be sampled
-        with replacement. When a language runs out of data, the probability distribution will be
-        changed to reflect this.
-
-        Returns
-        -------
-        data, targets, seq_len, language: Tuple[torch.Tensor, torch.Tensor, int, str]
-            Returns the data, its targets, the sequence length, and the language
-
-        Raises
-        ------
-        StopIteration
-            When we run out of data
-
-        """
-        if not self.eval:
-            # Sample languages to get data for
-            while True:
-                language_idx = self.lang_sampler.sample()
-                language = self.idx_to_language[language_idx]
-                language_data = self.data[language]
-
-                # prevent too big or too small seq_lens
-                try:
-                    yield next(language_data), language
-                except StopIteration:
-                    # TODO: modify the language proability distribution
-                    pass
-        else:
-            # Walk through languages sequentially
-            language_iter = iter(self.language_iter)
-            language = next(language_iter)
-            while True:
-                language = next(language_iter)
-                language_data = self.data[language]
-
-                try:
-                    yield next(language_data), language
-                except StopIteration:
-                    language = next(language_iter)
-
-    def get_total_iters(self) -> int:
-        """
-        Computes the approximate number of iterations to go through the entire dataset. Observer that
-        this might be a rough estimate if the sequence length and language to use is sampled from a
-        nonuniform distribution with replacement. Therefore this number should be regarded as a naive
-        approximation intended to give an estimate of the computational time.
-
-        Returns
-        -------
-        int
-            Total number of iterations given the sequence length, batch size, and size of dataset
-
-        """
-        if not self.total_iters:
-            self.total_iters = 0
-            for language, data in self.data.items():
-                self.total_iters += len(data)
-
-        return self.total_iters
-
-    def get_total_tokens(self):
-        """ """
-        raise NotImplementedError()
+        self.current = 0
 
     def __len__(self) -> int:
-        return self.get_total_iters()
+        return len(self.batch_config)
+
+    def __getitem__(self, i) -> Tuple[torch.Tensor, torch.Tensor, int, str]:
+        batch = self.batch_config[i]
+
+        source = self.data[batch['language']]
+
+        data, targets = create_batch(source, batch['seq_len'], batch['start_idx'], device=self.device)
+
+        return data, targets, batch['seq_len'], batch['language']
+
+    def __iter__(self):
+        self.current = 0
+        return self
+
+    def __next__(self):
+        if self.current < len(self.batch_config) - 1:
+            batch = self.__getitem__(self.current)
+            self.current += 1
+            return batch
+        else:
+            raise StopIteration
 
 
 # end class DataLoader
-
 
 def _read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')) -> Tuple[str, list, int]:
     """Reads the file
@@ -498,7 +391,7 @@ def _read_raw_data(filepath, regex=re.compile(r'[^\w\s\_\-\?\!\:\,\.]')) -> Tupl
     regex :
         The regex of which characters to keep in the processed data (Default value = re.compile(r'[^\w\s\_\-\?\!\:\)
     \.]') :
-        
+
 
     Returns
     -------
@@ -532,8 +425,6 @@ def _process_language_data(filepath, processor) -> torch.Tensor:
         Path to the file to be read.
     processor :
         A function handle to process each character (add_to_index or add_to_tensor)
-    language :
-        The language that is processed
 
     Returns
     -------
@@ -554,20 +445,6 @@ def _process_language_data(filepath, processor) -> torch.Tensor:
             i += 1
 
     return tensor
-
-
-def save_tensor(filepath: str, data: Dataset):
-    """
-
-    Parameters
-    ----------
-    filepath: str
-        The path to where the tensor shall be saved
-    data: Dataset
-        A dataset object wrapping the tensor
-        
-    """
-    torch.save(data.data, filepath)
 
 
 def batchify(data: torch.Tensor, batchsize: int) -> torch.Tensor:
@@ -593,7 +470,8 @@ def batchify(data: torch.Tensor, batchsize: int) -> torch.Tensor:
     return data
 
 
-def create_batch(source: torch.Tensor, seq_len: int, current_idx: int, device='cpu') -> Tuple[torch.Tensor, torch.Tensor]:
+def create_batch(source: torch.Tensor, seq_len: int, current_idx: int, device='cpu') -> Tuple[
+    torch.Tensor, torch.Tensor]:
     """
 
     Parameters
@@ -623,7 +501,106 @@ def create_batch(source: torch.Tensor, seq_len: int, current_idx: int, device='c
     return data, target
 
 
-def get_sampling_probabilities(datasets: dict, pwr: float) -> Categorical:
+def make_batches(data: dict, lang_probabilities: torch.Tensor = None, bptt: int = 125, batchsize: int = 1,
+                 oversample: bool = False, eval: bool = False) -> List[Dict]:
+    """
+    Prepares data for loading by pre-calculating the batches by sampling languages and sequence lengths at one time.
+
+    Parameters
+    ----------
+    data : dict
+        A dictionary formatted as (language: str, data: torch.Tensor) that contains the batchfied data.
+    lang_probabilities : torch.Tensor
+        A categorical distribution in torch.Tensor representation that represents the probability of sampling a language.
+        This parameter is useless if eval is set to True.
+    bptt : int
+        Backprop through time. Controls the mean of the sequence length distribution, or basically the sequence length
+        if eval is set to True.
+    batchsize : int
+        The batch size to use when batchifying the dataset.
+    oversample : bool
+        Oversample from the dataset or not. If true, the language probability distribution will not be adjusted when
+        a dataset runs out of data. Instead the language data index will be reset, and the next batch from that language
+        will be taken from the beginning of that language set.
+    eval : bool
+        Make an evaluation batch. If True, the sequence length will be kept constant, and the language data will be gone
+        through sequentially instead of sampling the language.
+
+    Returns
+    -------
+    dict:
+        A list of dictionaries. Each dictionary with keys 'language', 'seq_len', 'start_idx'`, that allows for creation
+        of a batch by calling `data, targets = create_batch(**dictionary)`
+
+    """
+
+    languages = [data.keys()]
+    language_to_idx = {lang: i for i, lang in enumerate(languages)}
+
+    batches = list()
+    tracking = {lang: {'idx': 0, 'exhausted': False} for lang in languages}
+
+    lang_probs = get_sampling_probabilities(data, 1.0) if lang_probabilities is None else lang_probabilities
+    lang_sampler = Categorical(lang_probs)
+    seq_len_gen = SequenceSequencer(bptt, constant=eval)
+
+    # To keep track on languages for eval mode
+    language_iter = iter(languages)
+    current_language = next(language_iter)
+
+    # batchfied_data = {lang: batchify(d, batchsize) for lang, d in data.items()}
+
+    def eval_language():
+        nonlocal current_language
+        if not tracking[current_language]['exhausted']:
+            return current_language
+        else:
+            current_language = next(language_iter)
+            return current_language
+
+    def train_language():
+        language_idx = lang_sampler.sample()
+        return languages[language_idx]
+
+    if eval:
+        get_lang = eval_language
+    else:
+        get_lang = train_language
+
+    while True:
+        try:
+            language = get_lang()
+        except StopIteration:
+            break
+        language_data = data[language]
+
+        seq_len = seq_len_gen.sample()
+        seq_len = min(seq_len, len(language_data - 1 - tracking[language]['idx']))
+
+        batches.append({'language': language, 'seq_len': seq_len, 'start_idx': tracking['idx']})
+
+        tracking[language]['idx'] += seq_len
+
+        # If we run out of data for a particular language set
+        if tracking[language]['idx'] >= len(language_data) - 1:
+            tracking[language]['idx'] = 0
+            tracking[language]['exhausted'] = True
+
+            # If we're all out of data
+            if all(d['exhausted'] for _, d in tracking.items()):
+                break
+
+            # Change probability distribution to ignore the exhausted dataset
+            if not oversample and not eval:
+                lang_probs[language_to_idx[language]] = 0
+                lang_probs /= lang_probs.sum()
+
+                lang_sampler = Categorical(lang_probs)
+
+    return batches
+
+
+def get_sampling_probabilities(datasets: dict, pwr: float) -> torch.Tensor:
     """
     In order to allow multi-language training, this method provides a categorical distribution that
     allows for sampling a language to use in training, with probability proportional to the amount of
@@ -646,7 +623,7 @@ def get_sampling_probabilities(datasets: dict, pwr: float) -> Categorical:
 
     Returns
     -------
-    torch.distributions.categorical.Categorical
+    torch.Tensor
         A categorical distribution for determining which language to use for training.
     """
 
@@ -658,7 +635,7 @@ def get_sampling_probabilities(datasets: dict, pwr: float) -> Categorical:
     probs = torch.pow(probs, pwr)
     probs /= probs.sum()
 
-    return Categorical(probs)
+    return probs
 
 
 if __name__ == '__main__':
