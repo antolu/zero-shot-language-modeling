@@ -114,7 +114,7 @@ def multithread(function, args: list, max_active_processes: int) -> list:
 
 
 def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                   optimizer: torch.optim.optimizer, use_apex=False, amp=None, **kwargs):
+                   optimizer: torch.optim.Optimizer, use_apex=False, amp=None, **kwargs):
     """
     Packages network parameters into a picklable dictionary containing keys
     * epoch: current epoch
@@ -176,7 +176,7 @@ def save_model(filepath: str, data):
         torch.save(data, f)
 
 
-def load_model(filepath: str, model: LSTM, optimizer: torch.optim.optimizer,
+def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
                loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, **kwargs):
     """
     Load a checkpointed model into memory by reference

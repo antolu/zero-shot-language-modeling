@@ -13,13 +13,12 @@ from model import LSTM
 from utils import detach
 
 
-def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
+def train(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer,
           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
           use_apex=False, amp=None, clip=None, parameters: list = None, bptt: int = 125, alpha: float = 0.,
           beta: float = 0., **kwargs):
 
     total_loss = 0
-    hidden = model.init_hidden(dataloader.batchsize)
 
     batch = 0
 
@@ -29,6 +28,7 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
 
     with tqdm(dataloader) as pbar:
         for data, targets, seq_len, lang in pbar:
+            hidden = model.init_hidden(dataloader.batchsize)
 
             lr2 = optimizer.param_groups[0]['lr']
             optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt * data_spec_lrweights[lang]
@@ -37,7 +37,7 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
             hidden = detach(hidden)
             optimizer.zero_grad()
 
-            output, hidden, rnn_hs, dropped_rnn_hs, loss_typ = model(data, hidden, lang, return_h=True)
+            output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
             if isinstance(loss_function, SplitCrossEntropyLoss):
                 raw_loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
             else:
@@ -49,8 +49,6 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
             # Temporal Activation Regularization (slowness)
             if beta:
                 loss = loss + sum(beta * (rnn_h[1:] - rnn_h[:-1]).pow(2).mean() for rnn_h in rnn_hs[-1:])
-            if loss_typ:
-                loss = loss + (1e-2 * loss_typ)
 
             if use_apex:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -59,7 +57,10 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: optim.optimizer,
                 loss.backward()
 
             if clip:
-                nn.utils.clip_grad_norm_(parameters, clip)
+                if use_apex:
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), clip)
+                else:
+                    torch.nn.utils.clip_grad_norm_(parameters, clip)
 
             optimizer.step()
 
@@ -112,7 +113,7 @@ def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCros
     return total_loss / len(languages)
 
 
-def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim,
+def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer,
            loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], ewc: EWC, bptt: int, clip: int,
            parameters: list, use_apex: bool = False, amp=None, alpha: float = 0, beta: float = 0,
            importance: int = 100000):
@@ -125,7 +126,7 @@ def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim,
             hidden = model.init_hidden(dataloader.batchsize)
             optimizer.zero_grad()
 
-            output, hidden, rnn_hs, dropped_rnn_hs, loss_typ = model(data, hidden, lang, return_h=True)
+            output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
             if isinstance(loss_function, SplitCrossEntropyLoss):
                 loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
             else:
@@ -149,7 +150,10 @@ def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim,
 
             # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
             if clip:
-                torch.nn.utils.clip_grad_norm_(parameters, clip)
+                if use_apex:
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), clip)
+                else:
+                    torch.nn.utils.clip_grad_norm_(parameters, clip)
 
             optimizer.step()
 

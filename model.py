@@ -67,7 +67,7 @@ class MLP(nn.Module):
 class LSTM(nn.Module):
     def __init__(self, cond_type: str, prior: Tensor, n_token: int, n_input: int, n_hidden: int, n_layers: int,
                  dropout: float = 0.4, dropouth: float = 0.1, dropouti: float = 0.1, dropoute: float = 0.1,
-                 wdrop: float = 0.2, wdrop_layers: list = None, tie_weights=False, dis_type=False):
+                 wdrop: float = 0.2, wdrop_layers: list = None, tie_weights=False):
         """
         Base LSTM for the language model
 
@@ -99,8 +99,6 @@ class LSTM(nn.Module):
             A list or tuple specifying which layers to apply weight drop to
         tie_weights: bool
             Flag to use weight tying in training.
-        dis_type: bool
-            Unknown use
         """
         super().__init__()
 
@@ -144,13 +142,6 @@ class LSTM(nn.Module):
         elif cond_type == 'oestling':
             self.prior2vec = [MLP(prior.shape[1], self.nlangvec) for l in range(n_layers)]
             self.prior2vec = nn.ModuleList(self.prior2vec)
-
-        if dis_type:
-            self.do_dis_typ = True
-            self.dis_typ = MLP(n_input if tie_weights else n_hidden, prior.shape[1])
-            self.loss_typ = nn.modules.distance.PairwiseDistance()
-        else:
-            self.do_dis_typ = False
 
         self.init_weights()
 
@@ -219,17 +210,10 @@ class LSTM(nn.Module):
 
         result = output.view(output.size(0) * output.size(1), output.size(2))
 
-        if self.do_dis_typ:
-            raise NotImplementedError('I have no idea what this boolean flag does (:')
-            pred_typ = self.dis_typ(result)
-            loss_typ = self.loss_typ(pred_typ, prior.expand(pred_typ.shape)).mean()
-        else:
-            loss_typ = None
-
         if return_h:
-            return result, hidden, raw_outputs, outputs, loss_typ
+            return result, hidden, raw_outputs, outputs
         else:
-            return result, hidden, loss_typ
+            return result, hidden
 
     def init_hidden(self, batchsize: int) -> list:
         """

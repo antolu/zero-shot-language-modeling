@@ -1,8 +1,8 @@
 import logging
 import re
 from glob import glob
+from math import ceil
 from os import path, listdir
-from sys import exit
 from pprint import pformat
 from typing import Tuple, Union, List, Dict
 from time import sleep
@@ -16,6 +16,10 @@ from utils import DotDict
 from parser import get_args
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+log.addHandler(ch)
 
 
 class SequenceSequencer:
@@ -70,7 +74,7 @@ class Data:
 
         mapping_filename = path.join(self.datadir, self.character_mappings_name)
         if path.exists(mapping_filename):
-            mapping_filename = self.__load_mapping()
+            self.__load_mapping()
 
         self.__create_cache()
 
@@ -93,7 +97,7 @@ class Data:
 
             for split_path in glob(path.join(language_dir, '*.txt')):
                 split = path.splitext(path.basename(split_path))[0]  # The split name is the file basename
-                savepath = path.splitext(split_path)[0] + 'pt'  # Save a torch file to the same directory
+                savepath = path.splitext(split_path)[0] + '.pt'  # Save a torch file to the same directory
 
                 data[language][split] = {
                     'language': language,
@@ -116,7 +120,8 @@ class Data:
         """
         return list(self.data.keys())
 
-    def get_split(self, split: str, languages: Union[str, list] = 'all', use_cached=True) -> Dict:
+    def get_split(self, split: str, languages: Union[str, list] = 'all', use_cached: bool = True,
+                  invert_include: bool = False) -> Dict:
         """Returns the dataset split based on the argument `split`
 
         Parameters
@@ -190,11 +195,12 @@ class Data:
                 raise ValueError(f'Language {languages} does not exist in memory.')
             languages = [languages]
         elif isinstance(languages, list):
-            for lang in languages:
-                if lang not in self.data:
-                    raise ValueError(f'Language {lang} does not exist in memory.')
-                if split not in self.data[lang]:
-                    raise ValueError(f'Split {split} does not exist for language {lang}')
+            if not invert_include:
+                for lang in languages:
+                    if lang not in self.data:
+                        raise ValueError(f'Language {lang} does not exist in memory.')
+                    if split not in self.data[lang]:
+                        raise ValueError(f'Split {split} does not exist for language {lang}')
         else:
             raise ValueError(f'Language {languages} does not exist in memory.')
 
@@ -204,7 +210,7 @@ class Data:
         def process_split(data: dict, return_list):
             log.debug('Preprocessing language and split {}/{}'.format(data['language'], data['split']))
 
-            split, dataset = _process_language_data(data['load_path'], processor)
+            split, dataset = _process_language_data(data['pth_path'], processor)
             torch.save(data['save_path'], dataset)
 
             output = data.copy()
@@ -214,10 +220,15 @@ class Data:
 
         # Prep to load dataset into memory
         to_process = list()
-        for lang in languages:
-            to_process.append(self.data[lang][split])
+        if not invert_include:
+            for lang in languages:
+                to_process.append(self.data[lang][split])
+        else:
+            for lang, lang_data in self.data.items():
+                if lang not in languages:
+                    to_process.append(lang_data[split])
 
-        log.info(f'Reading data languages {languages} into memory with split {split}')
+        log.info(f'[{split}]: Reading data languages {", ".join(languages)} into memory.')
         # Rebuild data tensors or load cached ones
         if not use_cached:
             with Manager() as manager:
@@ -233,39 +244,38 @@ class Data:
 
                 log.info(f'Starting to preprocess language data with {max_active_processes} workers')
                 i = 0
-                pbar = tqdm(total=len(to_process))
-                while i < len(to_process) or len(active_process) > 0:
+                with tqdm(total=len(to_process)) as pbar:
+                    while i < len(to_process) or len(active_process) > 0:
 
-                    # Register a finished thread to allow for a new one to be created
-                    for p in active_process.copy():
-                        p.join(0)
-                        if not p.is_alive():
-                            pbar.update(1)
-                            active_process.remove(p)
+                        # Register a finished thread to allow for a new one to be created
+                        for p in active_process.copy():
+                            p.join(0)
+                            if not p.is_alive():
+                                pbar.update(1)
+                                active_process.remove(p)
 
-                    # Start a new process if there are available cores
-                    if len(active_process) <= max_active_processes and i < len(to_process):
-                        p = processes[i]
-                        p.start()
-                        active_process.add(p)
-                        i += 1
-                        continue
+                        # Start a new process if there are available cores
+                        if len(active_process) <= max_active_processes and i < len(to_process):
+                            p = processes[i]
+                            p.start()
+                            active_process.add(p)
+                            i += 1
+                            continue
 
-                    sleep(1e-2)
+                        sleep(1e-2)
 
                 return {output['langauge']: output['data'] for output in return_list}
         else:
             log.info('Loading preprocessed data tensors')
-            pbar = tqdm(to_process)
-
             output = dict()
-            for item in pbar:
-                tensor = torch.load(item['load_path'])
-                output[item['split']] = tensor
+            for item in tqdm(to_process):
+                tensor = torch.load(item['pth_path'])
+                output[item['language']] = tensor
 
             return output
 
-    def make_dataset(self, split: str, languages: Union[str, list] = 'all', batchsize: int = 1) -> Dict:
+    def make_dataset(self, split: str, languages: Union[str, list] = 'all', batchsize: int = 1,
+                     invert_include: bool = False) -> Dict:
         """
         Constructs datasets based on the passed parameters. All the processed sts will be wrapped into a dictionary
         that can be fed to a data loader for efficient data loading. The data is made into batches in the same process
@@ -279,6 +289,9 @@ class Data:
             (Default value = 1)
         batchsize : int
             How big batches we are using.
+        invert_include: bool
+            Invert the search for languages to include in the dataset. In other words the languages in the
+            languages argument are excluded from the produced dataset, and all other languages are included.
 
         Returns
         -------
@@ -286,7 +299,8 @@ class Data:
             A dictionary containing {language: Dataset}
 
         """
-        data = self.get_split(split, languages)
+
+        data = self.get_split(split, languages, invert_include=invert_include)
 
         output = dict()
         for lang, d in data.items():
@@ -350,7 +364,7 @@ class DataLoader:
         self.data = data
         self.device = device
         self.batch_config = batch_config
-        self.batchsize = list(data.items())[0][1].size(0)
+        self.batchsize = list(data.items())[0][1].size(1)
 
         self.current = 0
 
@@ -534,13 +548,13 @@ def make_batches(data: dict, lang_probabilities: torch.Tensor = None, bptt: int 
 
     """
 
-    languages = [data.keys()]
+    languages = list(data.keys())
     language_to_idx = {lang: i for i, lang in enumerate(languages)}
 
     batches = list()
     tracking = {lang: {'idx': 0, 'exhausted': False} for lang in languages}
 
-    lang_probs = get_sampling_probabilities(data, 1.0) if lang_probabilities is None else lang_probabilities
+    lang_probs = get_sampling_probabilities(data, 1.0) if lang_probabilities is None else lang_probabilities.clone()
     lang_sampler = Categorical(lang_probs)
     seq_len_gen = SequenceSequencer(bptt, constant=eval)
 
@@ -567,35 +581,43 @@ def make_batches(data: dict, lang_probabilities: torch.Tensor = None, bptt: int 
     else:
         get_lang = train_language
 
-    while True:
-        try:
-            language = get_lang()
-        except StopIteration:
-            break
-        language_data = data[language]
+    approx_iters = 0
+    for language, language_data in data.items():
+        approx_iters += ceil(language_data.size(0) / bptt)
 
-        seq_len = seq_len_gen.sample()
-        seq_len = min(seq_len, len(language_data - 1 - tracking[language]['idx']))
+    log.info(f'\nPreparing batches with batchsize {batchsize}, bptt {batchsize}, for dataset of size {len(languages)}')
 
-        batches.append({'language': language, 'seq_len': seq_len, 'start_idx': tracking['idx']})
-
-        tracking[language]['idx'] += seq_len
-
-        # If we run out of data for a particular language set
-        if tracking[language]['idx'] >= len(language_data) - 1:
-            tracking[language]['idx'] = 0
-            tracking[language]['exhausted'] = True
-
-            # If we're all out of data
-            if all(d['exhausted'] for _, d in tracking.items()):
+    with tqdm(total=approx_iters, position=0) as pbar:
+        while True:
+            try:
+                language = get_lang()
+            except StopIteration:
                 break
+            language_data = data[language]
 
-            # Change probability distribution to ignore the exhausted dataset
-            if not oversample and not eval:
-                lang_probs[language_to_idx[language]] = 0
-                lang_probs /= lang_probs.sum()
+            seq_len = seq_len_gen.sample()
+            seq_len = min(seq_len, len(language_data - 1 - tracking[language]['idx']))
 
-                lang_sampler = Categorical(lang_probs)
+            batches.append({'language': language, 'seq_len': seq_len, 'start_idx': tracking[language]['idx']})
+
+            tracking[language]['idx'] += seq_len
+
+            # If we run out of data for a particular language set
+            if tracking[language]['idx'] >= len(language_data) - 1:
+                tracking[language]['idx'] = 0
+                tracking[language]['exhausted'] = True
+
+                # If we're all out of data
+                if all(d['exhausted'] for _, d in tracking.items()):
+                    break
+
+                # Change probability distribution to ignore the exhausted dataset
+                if not oversample and not eval:
+                    lang_probs[language_to_idx[language]] = 0
+                    lang_probs /= lang_probs.sum()
+
+                    lang_sampler = Categorical(lang_probs)
+            pbar.update(1)
 
     return batches
 

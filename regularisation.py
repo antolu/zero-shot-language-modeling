@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class WeightDrop(object):
+class WeightDrop(nn.Module):
     def __init__(self, module: nn.Module, weights_names_ls: list, dropout: float):
         """
         Helper class for implementing weight drop with the weight_drop function.
@@ -19,11 +19,12 @@ class WeightDrop(object):
             The amount of weight drop to apply
 
         """
+        super().__init__()
         self.weights_names_ls = weights_names_ls
         self.module = module
         self.dropout = dropout
 
-    def __call__(self, *args, **kwargs):  # the function formerly known as "forward_new"
+    def forward(self, *args):  # the function formerly known as "forward_new"
         for name_param in self.weights_names_ls:
             param = getattr(self.module, name_param)
             param_with_dropout = nn.Parameter(
@@ -31,7 +32,8 @@ class WeightDrop(object):
                 requires_grad=param.requires_grad)
             setattr(self.module, name_param, param_with_dropout)
 
-        return self.module.forward(*args, **kwargs)
+        self.module.flatten_parameters()
+        return self.module.forward(*args)
 
 
 class LockedDropout(nn.Module):

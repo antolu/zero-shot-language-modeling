@@ -12,6 +12,10 @@ from model import LSTM
 from regularisation import LockedDropout, WeightDrop
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+log.addHandler(ch)
 
 
 class BoringPrior:
@@ -27,7 +31,7 @@ class BoringPrior:
 
 class EWC:
     def __init__(self, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                 dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.optimizer = None):
+                 dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.Optimizer = None):
 
         self.model = model
         self.loss_function = loss_function

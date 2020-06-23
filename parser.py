@@ -17,7 +17,7 @@ def get_args():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--train', action='store_true', help='Train the model')
     mode.add_argument('--test', action='store_true', help='Test the model')
-    mode.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
+    parser.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
     parser.add_argument('--laplace', action='store_true', help='Use laplacian regularisation')
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
@@ -45,9 +45,9 @@ def get_args():
     parser.add_argument('--nlayers', type=int, default=3, help='Number of layers in the LSTM')
 
     # Regularisation options
-    parser.add_argument('--dropout', type=float, default=0.4, help='Dropout applied to layers')
+    parser.add_argument('--dropouto', type=float, default=0.4, help='Dropout for output hidden layers')
     parser.add_argument('--dropouti', type=float, default=0.1, help='Dropout for input embedding layers')
-    parser.add_argument('--dropouth', type=float, default=0.1, help='Dropout for rnn layers')
+    parser.add_argument('--dropouth', type=float, default=0.1, help='Dropout for intermediate hidden layers')
     parser.add_argument('--dropoute', type=float, default=0.1, help='Dropout to remove words from embedding layer')
     parser.add_argument('--wdrop', type=float, default=0.2,
                         help='Amount of weight dropout to apply to the RNN hidden to hidden matrix')
@@ -57,9 +57,9 @@ def get_args():
                         help='The batchsize to use in training')
     parser.add_argument('--valid-batchsize', type=int, default=10, dest='valid_batchsize')
     parser.add_argument('--test-batchsize', type=int, default=1, dest='test_batchsize')
-    parser.add_argument('--dev-langs', dest='dev_langs', type=list, nargs='+', default=[],
+    parser.add_argument('--dev-langs', dest='dev_langs', nargs='+', default=[],
                         help='Target languages on which performing zero- or few-shot evaluation')
-    parser.add_argument('--target-langs', dest='target_langs', type=list, nargs='+', default=[],
+    parser.add_argument('--target-langs', dest='target_langs', nargs='+', default=[],
                         help='Target languages on which performing zero- or few-shot evaluation')
 
     # Mixed precision settings

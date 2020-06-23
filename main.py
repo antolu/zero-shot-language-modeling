@@ -3,7 +3,6 @@
 import logging
 import math
 import random
-import warnings
 from datetime import datetime
 from os import path
 from pprint import pformat
@@ -19,8 +18,6 @@ from engine import train, evaluate, refine
 from model import LSTM
 from parser import get_args
 from utils import get_checkpoint, save_model, load_model, DotDict
-
-warnings.filterwarnings("ignore")
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -38,7 +35,7 @@ def main():
     use_apex = False
     if torch.cuda.is_available() and args.fp16:
         log.info('Loading Nvidia Apex and using AMP')
-        from apex import amp
+        from apex import amp, optimizers
         use_apex = True
     else:
         log.info('Using FP32')
@@ -56,17 +53,20 @@ def main():
     data = Data(args.datadir, args.dataset)
     data.load(args.rebuild)
 
-    train_set = data.make_dataset('train', batchsize=args.batchsize)
-    val_set = data.make_dataset('valid', batchsize=args.val_batchsize)  # TODO: use args.dev_lang to get validation set
-    test_set = data.make_dataset('test', batchsize=args.test_batchsize)
+    train_set = data.make_dataset('train', batchsize=args.batchsize, languages=args.dev_langs + args.target_langs,
+                                  invert_include=True)
+    val_set = data.make_dataset('valid', batchsize=args.valid_batchsize, languages=args.dev_langs)
+    test_set = data.make_dataset('test', batchsize=args.test_batchsize, languages=args.target_langs)
 
     train_language_distr = get_sampling_probabilities(train_set, 0.8)
     # train_loader = DataLoader(train_set, lang_probabilities=train_language_distr, device=device, eval=False)
-    val_loader = DataLoader(val_set, make_batches(val_set, batchsize=args.val_batchsize, bptt=args.bptt, eval=True),  device=device)
-    test_loader = DataLoader(test_set, make_batches(test_set, batchsize=args.test_batchsize, bptt=args.bptt, eval=True), device=device)
+    val_loader = DataLoader(val_set, make_batches(val_set, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True),
+                            device=device)
+    test_loader = DataLoader(test_set, make_batches(test_set, batchsize=args.test_batchsize, bptt=args.bptt, eval=True),
+                             device=device)
 
     if args.refine:
-        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize)
+        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize, languages=args.target_langs)
 
     n_token = len(data.idx_to_character)
 
@@ -79,23 +79,27 @@ def main():
     prior = None
 
     model = LSTM(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
-                 dropout=args.dropout,
+                 dropout=args.dropouto,
                  dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
-                 wdrop_layers=[0], tie_weights=args.tie_weights).to(device)
-
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
-
-    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
-    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a dataset of this small size
-    params = list(model.parameters()) + list(loss_function.parameters())
+                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
     if use_apex:
-        model, optimizer = amp.initialize(model, optimizer)
+        optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+    else:
+        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+
+    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+
+    if use_apex:
+        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+
+    params = list(model.parameters()) + list(loss_function.parameters())
 
     parameters = DotDict({
         'model': model,
         'optimizer': optimizer,
-        'loss': loss_function,
+        'loss_function': loss_function,
         'parameters': params,
         'use_apex': use_apex,
         'amp': amp if use_apex else None,
@@ -140,9 +144,10 @@ def main():
         val_losses = list()
 
         try:
-            pbar = tqdm.trange(start_epoch, args.no_epochs + 1)
+            pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1)
             for epoch in pbar:
-                batch_config = make_batches(train_set, lang_probabilities=train_language_distr, batchsize=args.batchsize, bptt=args.bptt)
+                batch_config = make_batches(train_set, lang_probabilities=train_language_distr,
+                                            batchsize=args.batchsize, bptt=args.bptt)
                 train_loader = DataLoader(train_set, batch_config, device=device)
                 train(train_loader, **parameters)
 
@@ -183,17 +188,19 @@ def main():
             save_model(path.join(args.dir_model,
                                  '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
                        get_checkpoint(epoch, **parameters))
+            return
     elif args.test:
         test()
 
     # Only test on existing languages if there are no held out languages
-    if not args.target:
+    if not args.target_langs:
         exit(0)
 
     # If use UNIV, calculate informed prior, else use boring prior
     if args.laplace:
         laplace_set = data.make_dataset('train', batchsize=args.batchsize)
-        laplace_loader = DataLoader(laplace_set, make_batches(laplace_set, batchsize=args.batchsize, bptt=100), device=device)
+        laplace_loader = DataLoader(laplace_set, make_batches(laplace_set, batchsize=args.batchsize, bptt=100),
+                                    device=device)
         ewc = EWC(model, loss_function, laplace_loader)
     else:
         ewc = BoringPrior()
@@ -210,7 +217,9 @@ def main():
             load_model(best_model, **parameters)
 
             for epoch in range(1, args.refine_epochs + 1):
-                refine_dataloader = DataLoader(refine_data, make_batches(refine_data, batchsize=args.val_batchsize, bptt=args.bptt), device=device)
+                refine_dataloader = DataLoader(refine_data,
+                                               make_batches(refine_data, batchsize=args.val_batchsize, bptt=args.bptt),
+                                               device=device)
                 refine(refine_dataloader, **parameters, importance=10000 if args.laplace else 1e-5)
                 if epoch and epoch % 5 == 5:
                     evaluate(test_loader, model, loss_function)
