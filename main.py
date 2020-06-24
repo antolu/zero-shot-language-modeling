@@ -118,14 +118,7 @@ def main():
             log.info('Loading the checkpoint at {}'.format(args.checkpoint))
             checkpoint = load_model(args.checkpoint, **parameters)
 
-            model.load_state_dict(checkpoint['model'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            loss_function.load_state_dict(checkpoint['loss'])
-
             start_epoch = checkpoint['epoch']
-
-            if use_apex:
-                amp.load_state_dict(checkpoint['amp'])
 
     saved_models = list()
 
@@ -198,10 +191,11 @@ def main():
 
     # If use UNIV, calculate informed prior, else use boring prior
     if args.laplace:
-        laplace_set = data.make_dataset('train', batchsize=args.batchsize)
+        log.info('Creating laplace approximation dataset')
+        laplace_set = data.make_dataset('train', batchsize=args.batchsize, languages=args.dev_langs + args.target_langs, invert_include=True)
         laplace_loader = DataLoader(laplace_set, make_batches(laplace_set, batchsize=args.batchsize, bptt=100),
                                     device=device)
-        ewc = EWC(model, loss_function, laplace_loader)
+        ewc = EWC(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp)
     else:
         ewc = BoringPrior()
 

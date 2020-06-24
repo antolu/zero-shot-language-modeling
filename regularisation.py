@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+from torch.nn import Parameter
 
 
 class WeightDrop(nn.Module):
@@ -24,12 +25,16 @@ class WeightDrop(nn.Module):
         self.module = module
         self.dropout = dropout
 
+        for name_w in weights_names_ls:
+            w = getattr(module, name_w)
+            del self.module._parameters[name_w]
+            self.module.register_parameter(name_w + '_raw', Parameter(w.data))
+
     def forward(self, *args):  # the function formerly known as "forward_new"
         for name_param in self.weights_names_ls:
-            param = getattr(self.module, name_param)
+            param = getattr(self.module, name_param + '_raw')
             param_with_dropout = nn.Parameter(
-                torch.nn.functional.dropout(param, p=self.dropout, training=self.module.training),
-                requires_grad=param.requires_grad)
+                torch.nn.functional.dropout(param, p=self.dropout, training=self.module.training))
             setattr(self.module, name_param, param_with_dropout)
 
         self.module.flatten_parameters()
@@ -66,7 +71,7 @@ class LockedDropout(nn.Module):
 
     def __repr__(self):
         return self.__class__.__name__ + '(' \
-               + 'p=' + str(self.p) + ')'
+               + 'p=' + str(self.dropout) + ')'
 
 
 class EmbeddedDropout(nn.Module):

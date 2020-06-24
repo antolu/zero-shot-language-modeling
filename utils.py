@@ -212,6 +212,8 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
             raise ValueError('Key amp not in checkpoint. Cannot load apex.')
         amp.load_state_dict(checkpoint['amp'])
 
+    return checkpoint
+
 
 def detach(data: Union[torch.Tensor, list]):
     if isinstance(data, torch.Tensor):

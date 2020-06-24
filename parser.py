@@ -14,9 +14,8 @@ def get_args():
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
 
     # Arguments concerning training and testing the model
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument('--train', action='store_true', help='Train the model')
-    mode.add_argument('--test', action='store_true', help='Test the model')
+    parser.add_argument('--train', action='store_true', help='Train the model')
+    parser.add_argument('--test', action='store_true', help='Test the model')
     parser.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
     parser.add_argument('--laplace', action='store_true', help='Use laplacian regularisation')
 

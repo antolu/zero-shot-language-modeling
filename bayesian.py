@@ -66,7 +66,7 @@ class EWC:
             for inputs, targets, seq_len, lang in self.dataloader:
                 hidden = self.model.init_hidden(self.dataloader.batchsize)
                 self.model.zero_grad()
-                output, hidden, loss_typ = self.model(inputs, hidden, lang)
+                output, hidden = self.model(inputs, hidden, lang)
 
                 loss = self.loss_function(self.model.decoder.weight, self.model.decoder.bias, output, targets)
                 if self.use_apex and self.optimizer:
