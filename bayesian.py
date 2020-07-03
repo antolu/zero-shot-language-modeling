@@ -1,4 +1,5 @@
 import logging
+import time
 from copy import deepcopy
 from typing import Union
 
@@ -45,13 +46,13 @@ class EWC:
         self._precision_matrices = self._diag_fisher()
 
         for n, p in deepcopy(self.params).items():
-            self._means[n] = p
+            self._means[n] = p.clone().detach()
 
     def _diag_fisher(self):
         precision_matrices = {}
         for n, p in deepcopy(self.params).items():
             p.data.zero_()
-            precision_matrices[n] = p
+            precision_matrices[n] = p.clone().detach()
         self.model.train()
         for m in self.model.modules():
             if isinstance(m, torch.nn.Dropout):
@@ -62,7 +63,8 @@ class EWC:
                 print(m)
         batch = 0
         log.info("Starting calculation of Fisher's matrix")
-        with tqdm(self.dataloader) as pbar:
+        start_time = time.time()
+        with tqdm(self.dataloader, dynamic_ncols=True) as pbar:
             for inputs, targets, seq_len, lang in self.dataloader:
                 hidden = self.model.init_hidden(self.dataloader.batchsize)
                 self.model.zero_grad()
@@ -80,10 +82,11 @@ class EWC:
                 pbar.update(1)
 
                 for n, p in self.params.items():
-                    precision_matrices[n].data += p.grad.data ** 2
+                    if p.grad is not None:
+                        precision_matrices[n].data += p.grad.data ** 2
 
         precision_matrices = {n: p / batch for n, p in precision_matrices.items()}
-        log.info("Finished calculation of Fisher's matrix, it took", pbar.format_interval(pbar.format_dict['elapsed']))
+        log.info("Finished calculation of Fisher's matrix, it took {} minutes".format((time.time() - start_time) / 1000 / 60))
         return precision_matrices
 
     def penalty(self, model):
@@ -92,3 +95,4 @@ class EWC:
             if p.requires_grad:
                 _loss = self._precision_matrices[n] * (p - self._means[n]) ** 2
                 loss += _loss.sum()
+        return loss

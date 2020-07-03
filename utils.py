@@ -203,7 +203,7 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
     with open(filepath, 'rb') as f:
         checkpoint = torch.load(f)
 
-    model.load_state_dict(checkpoint['model'])
+    model.load_state_dict(checkpoint['model'], strict=False)
     optimizer.load_state_dict(checkpoint['optimizer'])
     loss_function.load_state_dict(checkpoint['loss'])
 

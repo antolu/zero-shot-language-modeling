@@ -15,11 +15,11 @@ from tqdm import tqdm
 from utils import DotDict
 from parser import get_args
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-log.addHandler(ch)
+log = logging.getLogger('zerolm')
+# log.setLevel(logging.INFO)
+# ch = logging.StreamHandler()
+# ch.setLevel(logging.INFO)
+# log.addHandler(ch)
 
 
 class SequenceSequencer:

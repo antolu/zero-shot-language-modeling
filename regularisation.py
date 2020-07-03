@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+import warnings
+from typing import List
 
 import torch
 import torch.nn as nn
 from torch.nn import Parameter
+import torch.nn.functional as F
 
 
 class WeightDrop(nn.Module):
-    def __init__(self, module: nn.Module, weights_names_ls: list, dropout: float):
+    def __init__(self, module: nn.Module, dropout: float, weights_names_ls: list):
         """
         Helper class for implementing weight drop with the weight_drop function.
 
@@ -25,20 +28,62 @@ class WeightDrop(nn.Module):
         self.module = module
         self.dropout = dropout
 
-        for name_w in weights_names_ls:
-            w = getattr(module, name_w)
-            del self.module._parameters[name_w]
-            self.module.register_parameter(name_w + '_raw', Parameter(w.data))
+        for name_param in weights_names_ls:
+            w = getattr(module, name_param)
+            self.module._parameters[name_param] = F.dropout(w, p=self.dropout, training=False)
+            self.module.register_parameter(f'{name_param}_raw', nn.Parameter(w.data))
 
     def forward(self, *args):  # the function formerly known as "forward_new"
         for name_param in self.weights_names_ls:
-            param = getattr(self.module, name_param + '_raw')
-            param_with_dropout = nn.Parameter(
-                torch.nn.functional.dropout(param, p=self.dropout, training=self.module.training))
-            setattr(self.module, name_param, param_with_dropout)
+            param = getattr(self.module, f'{name_param}_raw')
+            param_with_dropout = nn.functional.dropout(param, p=self.dropout, training=self.training)
+            self.module._parameters[name_param] = param_with_dropout
 
         self.module.flatten_parameters()
+
+        # forward_res = self.module.forward(*args)
+        # return forward_res
         return self.module.forward(*args)
+
+
+# class WeightDrop(nn.Module):
+#     """A module that warps another layer in which some weights will be replaced by 0 during training."""
+#
+#     def __init__(self, module: nn.Module, p: float, layer_names: List[str] = ['weight_hh_l0']):
+#         super(WeightDrop, self).__init__()
+#         self.module, self.dropout, self.layer_names = module, p, layer_names
+#         self.idxs = [] if hasattr(self.module, '_flat_weights_names') else None
+#         for layer in self.layer_names:
+#             # Makes a copy of the weights of the selected layers.
+#             w = getattr(self.module, layer)
+#             self.register_parameter(f'{layer}_raw', nn.Parameter(w.data))
+#             self.module._parameters[layer] = F.dropout(w, p=self.dropout, training=False)
+#             if self.idxs is not None: self.idxs.append(self.module._flat_weights_names.index(layer))
+#         if isinstance(self.module, (nn.RNNBase, nn.modules.rnn.RNNBase)):
+#             self.module.flatten_parameters = self._do_nothing
+#
+#     def _setweights(self):
+#         "Apply dropout to the raw weights."
+#         for i, layer in enumerate(self.layer_names):
+#             raw_w = getattr(self, f'{layer}_raw')
+#             self.module._parameters[layer] = F.dropout(raw_w, p=self.dropout, training=self.training)
+#             if self.idxs is not None: self.module._flat_weights[self.idxs[i]] = self.module._parameters[layer]
+#
+#     def forward(self, *args):
+#         self._setweights()
+#         with warnings.catch_warnings():
+#             # To avoid the warning that comes because the weights aren't flattened.
+#             warnings.simplefilter("ignore")
+#             return self.module.forward(*args)
+#
+#     def reset(self):
+#         for layer in self.layer_names:
+#             raw_w = getattr(self, f'{layer}_raw')
+#             self.module._parameters[layer] = F.dropout(raw_w, p=self.dropout, training=False)
+#         if hasattr(self.module, 'reset'): self.module.reset()
+#
+#     def _do_nothing(self):
+#         pass
 
 
 class LockedDropout(nn.Module):
@@ -85,6 +130,7 @@ class EmbeddedDropout(nn.Module):
     scale: torch.Tensor
         Scale to apply
     """
+
     def __init__(self, dropout: float = 0.1, scale=None):
         """
 

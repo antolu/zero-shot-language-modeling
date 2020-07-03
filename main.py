@@ -11,6 +11,25 @@ import torch
 import tqdm
 from torch.optim import Adam
 
+timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+
+LOG_DIR = 'logs'
+log = logging.getLogger('zerolm')
+log.setLevel(logging.DEBUG)
+
+fh = logging.FileHandler(path.join(LOG_DIR, f'zero_lm_{timestamp}.log'))
+fh.setLevel(logging.DEBUG)
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+
+formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(message)s', "%Y-%m-%d %H:%M:%S")
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+log.addHandler(fh)
+log.addHandler(ch)
+
 from bayesian import BoringPrior, EWC
 from criterion import SplitCrossEntropyLoss
 from data import Data, DataLoader, get_sampling_probabilities, make_batches
@@ -18,12 +37,7 @@ from engine import train, evaluate, refine
 from model import LSTM
 from parser import get_args
 from utils import get_checkpoint, save_model, load_model, DotDict
-
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-log.addHandler(ch)
+from regularisation import WeightDrop
 
 
 def main():
@@ -32,6 +46,9 @@ def main():
     log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
     assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
 
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    log.info('Using device {}.'.format(device))
+
     use_apex = False
     if torch.cuda.is_available() and args.fp16:
         log.info('Loading Nvidia Apex and using AMP')
@@ -39,10 +56,8 @@ def main():
         use_apex = True
     else:
         log.info('Using FP32')
+        amp = None
 
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    log.info('Using device {}.'.format(device))
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
     log.info(f'Using time stamp {timestamp} to save models.')
 
     if not args.no_seed:
@@ -106,7 +121,16 @@ def main():
         'clip': args.clip,
         'alpha': args.alpha,
         'beta': args.beta,
+        'bptt': args.bptt,
     })
+
+    if args.clip:
+        if use_apex:
+            for p in amp.master_params(optimizer):
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+        else:
+            for p in model.parameters():
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
 
     # Load model checkpoint if available
     start_epoch = 1
@@ -119,6 +143,13 @@ def main():
             checkpoint = load_model(args.checkpoint, **parameters)
 
             start_epoch = checkpoint['epoch']
+
+        if args.wdrop:
+            for rnn in model.rnns:
+                if isinstance(rnn, WeightDrop):
+                    rnn.dropout = args.wdrop
+                elif rnn.zoneout > 0:
+                    rnn.zoneout = args.wdrop
 
     saved_models = list()
 
@@ -137,7 +168,7 @@ def main():
         val_losses = list()
 
         try:
-            pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1)
+            pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
                 batch_config = make_batches(train_set, lang_probabilities=train_language_distr,
                                             batchsize=args.batchsize, bptt=args.bptt)
@@ -167,7 +198,7 @@ def main():
                 val_losses.append(val_loss)
 
                 # Reduce lr every 1/3 total epochs
-                if epoch > f / 3 * args.no_epochs:
+                if epoch - 1 > f / 3 * args.no_epochs:
                     log.info('Epoch {}/{}. Dividing LR by 10'.format(epoch, args.no_epochs))
                     for g in optimizer.param_groups:
                         g['lr'] = g['lr'] / 10
@@ -179,7 +210,7 @@ def main():
             log.info('Saving last model to disk')
 
             save_model(path.join(args.dir_model,
-                                 '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with apex' if use_apex else '')),
+                                 '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
                        get_checkpoint(epoch, **parameters))
             return
     elif args.test:
@@ -205,18 +236,28 @@ def main():
     if args.refine:
         # reset learning rate
         optimizer.param_groups[0]['lr'] = args.lr
+        final_loss = False
+        loss = 0
 
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
+            final_loss = False
             refine_data = {lang: lang_data}
             load_model(best_model, **parameters)
 
+            log.info(f'Refining for language {lang}')
             for epoch in range(1, args.refine_epochs + 1):
                 refine_dataloader = DataLoader(refine_data,
-                                               make_batches(refine_data, batchsize=args.val_batchsize, bptt=args.bptt),
+                                               make_batches(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt),
                                                device=device)
-                refine(refine_dataloader, **parameters, importance=10000 if args.laplace else 1e-5)
-                if epoch and epoch % 5 == 5:
-                    evaluate(test_loader, model, loss_function)
+                refine(refine_dataloader, ewc=ewc, **parameters, importance=10000 if args.laplace else 1e-5)
+                if epoch % 5 == 0:
+                    final_loss = True
+                    loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+                    log.info(f'Language: {lang} | epoch: {epoch} | loss: {loss} |')
+
+            if not final_loss:
+                loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+            log.info(f'Final loss for language {lang}: {loss}')
 
 
 if __name__ == "__main__":

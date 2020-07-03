@@ -9,8 +9,7 @@ def get_args():
                         help='Path to the root directory containing the datasets.')
     parser.add_argument('--dataset', type=str, default='latin',
                         help='Which dataset to use', choices=['ipa', 'latin'])
-    parser.add_argument('--dir_model', default='checkpoints/', help='Path to project data')
-    parser.add_argument('--checkpoint', '-c', default=None, help='path to pretrained-model')
+    parser.add_argument('--checkpoint', type=str, default=None, help='path to pretrained-model')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
 
     # Arguments concerning training and testing the model
@@ -24,8 +23,11 @@ def get_args():
                         help='The epoch to start/resume training at')
     parser.add_argument('--no-epochs', type=int, default=6, dest='no_epochs',
                         help='Number of epochs to train the model')
+    parser.add_argument('--refine-epochs', type=int, default=25, dest='refine_epochs', help='Number of epochs to refine model with fisher matrix')
     parser.add_argument('-lr', '--lr', type=float, default=1.e-4, help='The learning rate for the Adam optimiser.')
     parser.add_argument('--wdecay', type=float, default=1.2e-6, help='Weight decay applied to all weights')
+    parser.add_argument('--when', nargs="+", type=int, default=[-1],
+                        help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
     parser.add_argument('--bptt', type=float, default=125, help='Mean sequence length (backprop through time')
     parser.add_argument('--clip', type=float, default=0.25, help='Amount of gradient clipping')
     parser.add_argument('--alpha', type=float, default=2,

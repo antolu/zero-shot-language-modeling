@@ -17,6 +17,7 @@ class MLP(nn.Module):
     mlp: torch.nn.sequential
         A torch sequential that is the MLP
     """
+
     def __init__(self, input_dim: int, dimensions: Union[int, list], activation: str = 'relu', dropout: float = 0.0):
         """
 
@@ -102,17 +103,6 @@ class LSTM(nn.Module):
         """
         super().__init__()
 
-        self.lstms = [nn.LSTM(n_input if l == 0 else n_hidden, n_hidden if l != n_layers - 1 else n_input, 1, dropout=0)
-                      for l in range(n_layers)]
-
-        if wdrop_layers is not None:
-            for l, lstm in enumerate(self.lstms):
-                if l in wdrop_layers:
-                    self.lstms[l] = WeightDrop(lstm, ['weight_hh_l0'], wdrop)
-
-        self.lstms = nn.ModuleList(self.lstms)
-        self.decoder = nn.Linear(n_hidden, n_token)
-
         cond_type = cond_type.lower()
         self.cond_type = cond_type
         self.n_inputs = n_input
@@ -131,10 +121,7 @@ class LSTM(nn.Module):
             weight = prior.clone()
             self.prior = nn.Embedding.from_pretrained(weight)
             self.prior.weight.requires_grad = False
-            self.nlangvec = n_hidden // 16
-        self.tie_weights = tie_weights
-        if tie_weights:
-            self.decoder.weight = self.encoder.weight
+        self.nlangvec = n_hidden // 16
 
         if cond_type == 'sutskever':
             self.prior2hid = MLP(prior.shape[1], n_hidden)
@@ -142,6 +129,22 @@ class LSTM(nn.Module):
         elif cond_type == 'oestling':
             self.prior2vec = [MLP(prior.shape[1], self.nlangvec) for l in range(n_layers)]
             self.prior2vec = nn.ModuleList(self.prior2vec)
+
+        self.rnns = [torch.nn.LSTM((n_input if lay == 0 else n_hidden) + (self.nlangvec * (cond_type == "oestling")),
+                                   n_hidden if lay != n_layers - 1 else (n_input if tie_weights else n_hidden), 1,
+                                   dropout=0) for lay in range(n_layers)]
+
+        if wdrop_layers and wdrop:
+            for l, lstm in enumerate(self.rnns):
+                if l in wdrop_layers:
+                    self.rnns[l] = WeightDrop(lstm, wdrop, ['weight_hh_l0'])
+
+        self.rnns = nn.ModuleList(self.rnns)
+        self.decoder = nn.Linear(n_hidden, n_token)
+
+        self.tie_weights = tie_weights
+        if tie_weights:
+            self.decoder.weight = self.encoder.weight
 
         self.init_weights()
 
@@ -188,7 +191,7 @@ class LSTM(nn.Module):
         raw_outputs = []
         outputs = []
 
-        for l, rnn in enumerate(self.lstms):
+        for l, rnn in enumerate(self.rnns):
             if self.cond_type == 'oestling':
                 prior = self.prior(lang)
                 prior_emb = self.prior2vec[l].expand(embeddings.size(0), embeddings.size(1), self.nlangvec)
