@@ -4,4 +4,5 @@ dataset
 checkpoints
 lstm
 awd-lstm
+parameter-factorization
 src

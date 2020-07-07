@@ -11,6 +11,8 @@ import torch
 import tqdm
 from torch.optim import Adam
 
+from data import DataLoader
+
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
 LOG_DIR = 'logs'
@@ -30,13 +32,13 @@ ch.setFormatter(formatter)
 log.addHandler(fh)
 log.addHandler(ch)
 
-from bayesian import BoringPrior, EWC
+from laplace import GaussianPrior, LaplacePrior
 from criterion import SplitCrossEntropyLoss
-from data import Data, DataLoader, get_sampling_probabilities, make_batches
+from data import get_sampling_probabilities, Dataset, Corpus
 from engine import train, evaluate, refine
-from model import LSTM
-from parser import get_args
-from utils import get_checkpoint, save_model, load_model, DotDict
+from models import RNN
+from utils.parser import get_args
+from utils import make_checkpoint, save_model, load_model, DotDict
 from regularisation import WeightDrop
 
 
@@ -65,25 +67,56 @@ def main():
         torch.manual_seed(args.seed)
         random.seed(args.seed)
 
-    data = Data(args.datadir, args.dataset)
-    data.load(args.rebuild)
+    data = Corpus(args.datadir)
 
-    train_set = data.make_dataset('train', batchsize=args.batchsize, languages=args.dev_langs + args.target_langs,
-                                  invert_include=True)
-    val_set = data.make_dataset('valid', batchsize=args.valid_batchsize, languages=args.dev_langs)
-    test_set = data.make_dataset('test', batchsize=args.test_batchsize, languages=args.target_langs)
-
-    train_language_distr = get_sampling_probabilities(train_set, 0.8)
-    # train_loader = DataLoader(train_set, lang_probabilities=train_language_distr, device=device, eval=False)
-    val_loader = DataLoader(val_set, make_batches(val_set, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True),
-                            device=device)
-    test_loader = DataLoader(test_set, make_batches(test_set, batchsize=args.test_batchsize, bptt=args.bptt, eval=True),
-                             device=device)
+    data_splits = [
+        {
+            'split': 'train',
+            'languages': args.dev_langs + args.target_langs,
+            'invert_include': True,
+        },
+        {
+            'split': 'valid',
+            'languages': args.dev_langs,
+        },
+        {
+            'split': 'test',
+            'languages': args.target_langs,
+        },
+    ]
 
     if args.refine:
-        refine_set = data.make_dataset('train_100', batchsize=args.test_batchsize, languages=args.target_langs)
+        data_splits.append(
+            {
+                'split': 'train_100',
+                'languages': args.target_langs,
+                'ignore_missing': True,
+            }
+        )
 
-    n_token = len(data.idx_to_character)
+    data_splits = data.make_datasets(data_splits, force_rebuild=args.rebuild)
+    train_set, val_set, test_set = data_splits['train'], data_splits['valid'], data_splits['test']
+    dictionary = data_splits['dictionary']
+
+    train_language_distr = get_sampling_probabilities(train_set, 0.8)
+    train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True, device=device,
+                        language_probabilities=train_language_distr)
+    val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True,
+                      device=device)
+    test_set = Dataset(test_set, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True,
+                       device=device)
+
+    train_loader = DataLoader(train_set, num_workers=args.workers)
+    val_loader = DataLoader(val_set, num_workers=args.workers)
+    test_loader = DataLoader(test_set, num_workers=args.workers)
+
+    if args.refine:
+        refine_set = dict()
+        for lang, lang_d in data_splits['train_100'].items():
+            refine_set[lang] = Dataset({lang: lang_d}, batchsize=args.valid_batchsize, bptt=args.bptt,
+                                       reset_on_iter=True)
+
+    n_token = len(dictionary.idx2tkn)
 
     # Load and preprocess matrix of typological features
     # TODO: implement this, the OEST
@@ -93,10 +126,10 @@ def main():
     # prior_matrix = pca.fit_transform(prior_matrix)
     prior = None
 
-    model = LSTM(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
-                 dropout=args.dropouto,
-                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
-                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
+    model = RNN(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
+                dropout=args.dropouto,
+                dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
+                wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
@@ -122,6 +155,7 @@ def main():
         'alpha': args.alpha,
         'beta': args.beta,
         'bptt': args.bptt,
+        'device': device,
     })
 
     if args.clip:
@@ -167,13 +201,15 @@ def main():
 
         val_losses = list()
 
+        # calculate specific language lr
+        data_spec_count = sum([len(ds) for l, ds in train_set.data.items()])
+        data_spec_avg = data_spec_count / len(train_set.data.items())
+        data_spec_lrweights = dict([(l, data_spec_avg / len(ds)) for l, ds in train_set.data.items()])
+
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
-                batch_config = make_batches(train_set, lang_probabilities=train_language_distr,
-                                            batchsize=args.batchsize, bptt=args.bptt)
-                train_loader = DataLoader(train_set, batch_config, device=device)
-                train(train_loader, **parameters)
+                train(train_loader, lr_weights=data_spec_lrweights, **parameters)
 
                 val_loss = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
@@ -181,7 +217,7 @@ def main():
                 # Save model
                 filename = path.join(args.dir_model,
                                      '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''))
-                save_model(filename, get_checkpoint(epoch + 1, **parameters))
+                save_model(filename, make_checkpoint(epoch + 1, **parameters))
                 saved_models.append(filename)
 
                 # Early stopping
@@ -209,9 +245,9 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
-            save_model(path.join(args.dir_model,
+            save_model(path.join(args.checkpoint_dir,
                                  '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
-                       get_checkpoint(epoch, **parameters))
+                       make_checkpoint(epoch, **parameters))
             return
     elif args.test:
         test()
@@ -223,12 +259,11 @@ def main():
     # If use UNIV, calculate informed prior, else use boring prior
     if args.laplace:
         log.info('Creating laplace approximation dataset')
-        laplace_set = data.make_dataset('train', batchsize=args.batchsize, languages=args.dev_langs + args.target_langs, invert_include=True)
-        laplace_loader = DataLoader(laplace_set, make_batches(laplace_set, batchsize=args.batchsize, bptt=100),
-                                    device=device)
-        ewc = EWC(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp)
+        laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
+        laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
+        prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp, device=device)
     else:
-        ewc = BoringPrior()
+        prior = GaussianPrior()
 
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
 
@@ -236,28 +271,35 @@ def main():
     if args.refine:
         # reset learning rate
         optimizer.param_groups[0]['lr'] = args.lr
-        final_loss = False
         loss = 0
 
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
             final_loss = False
             refine_data = {lang: lang_data}
+            refine_data = Dataset(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt, device=device,
+                                  reset_on_iter=True)
+            refine_dataloader = DataLoader(refine_data, num_workers=args.workers)
             load_model(best_model, **parameters)
 
-            log.info(f'Refining for language {lang}')
+            log.info(f'Refining for language {dictionary.idx2lang[lang]}')
             for epoch in range(1, args.refine_epochs + 1):
-                refine_dataloader = DataLoader(refine_data,
-                                               make_batches(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt),
-                                               device=device)
-                refine(refine_dataloader, ewc=ewc, **parameters, importance=10000 if args.laplace else 1e-5)
+                refine(refine_dataloader, prior=prior, **parameters, importance=10000 if args.laplace else 1e-5)
                 if epoch % 5 == 0:
                     final_loss = True
-                    loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
-                    log.info(f'Language: {lang} | epoch: {epoch} | loss: {loss} |')
+                    loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+
+                    langstr = dictionary.idx2lang[lang.item()]
+                    log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                        langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
+                    )
 
             if not final_loss:
-                loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
-            log.info(f'Final loss for language {lang}: {loss}')
+                loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+
+            langstr = dictionary.idx2lang[lang.item()]
+            log.debug('Final loss: | Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
+            )
 
 
 if __name__ == "__main__":

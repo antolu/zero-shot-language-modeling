@@ -2,11 +2,12 @@ from collections import defaultdict
 
 import torch
 import torch.nn as nn
+from torch.nn.modules.loss import _Loss
 
 import numpy as np
 
 
-class SplitCrossEntropyLoss(nn.Module):
+class SplitCrossEntropyLoss(_Loss):
     """
     SplitCrossEntropyLoss calculates an approximate softmax
     """

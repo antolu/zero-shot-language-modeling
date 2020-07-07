@@ -5,34 +5,19 @@ from typing import Union
 
 import torch
 from torch.nn import CrossEntropyLoss
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
-from data import DataLoader
-from model import LSTM
 from regularisation import LockedDropout, WeightDrop
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-log.addHandler(ch)
 
 
-class BoringPrior:
-    @classmethod
-    def penalty(cls, model):
-        loss = 0
-        for n, p in model.named_parameters():
-            if p.requires_grad:
-                _loss = p ** 2
-                loss += _loss.sum()
-        return loss
-
-
-class EWC:
-    def __init__(self, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                 dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.Optimizer = None):
+class LaplacePrior:
+    def __init__(self, model: torch.nn.Module, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
+                 dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.Optimizer = None,
+                 device: Union[torch.device, str] = 'cpu'):
 
         self.model = model
         self.loss_function = loss_function
@@ -40,6 +25,7 @@ class EWC:
         self.use_apex = use_apex
         self.amp = amp
         self.optimizer = optimizer
+        self.device = device
 
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
         self._means = {}
@@ -53,7 +39,11 @@ class EWC:
         for n, p in deepcopy(self.params).items():
             p.data.zero_()
             precision_matrices[n] = p.clone().detach()
+
+        # need to be in train mode to calculate gradients
         self.model.train()
+
+        # deactivate dropout to calculate full gradients
         for m in self.model.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = 0
@@ -61,12 +51,17 @@ class EWC:
             elif isinstance(m, LockedDropout) or isinstance(m, WeightDrop):
                 m.dropout = 0
                 print(m)
+
         batch = 0
         log.info("Starting calculation of Fisher's matrix")
         start_time = time.time()
+
         with tqdm(self.dataloader, dynamic_ncols=True) as pbar:
-            for inputs, targets, seq_len, lang in self.dataloader:
-                hidden = self.model.init_hidden(self.dataloader.batchsize)
+            for inputs, targets, seq_len, lang in pbar:
+                inputs.squeeze(0).to(self.device)
+                targets.squeeze(0).to(self.device)
+
+                hidden = self.model.init_hidden(inputs.size(-1))
                 self.model.zero_grad()
                 output, hidden = self.model(inputs, hidden, lang)
 
@@ -86,10 +81,11 @@ class EWC:
                         precision_matrices[n].data += p.grad.data ** 2
 
         precision_matrices = {n: p / batch for n, p in precision_matrices.items()}
-        log.info("Finished calculation of Fisher's matrix, it took {} minutes".format((time.time() - start_time) / 1000 / 60))
+        log.info("Finished calculation of Fisher's matrix, it took {} minutes".format(
+            (time.time() - start_time) / 1000 / 60))
         return precision_matrices
 
-    def penalty(self, model):
+    def penalty(self, model, *args) -> Union[torch.Tensor, int]:
         loss = 0
         for n, p in model.named_parameters():
             if p.requires_grad:

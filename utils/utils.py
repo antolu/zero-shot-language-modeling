@@ -46,7 +46,7 @@ class DotDict(dict):
         del self.__dict__[key]
 
 
-def multithread(function, args: list, max_active_processes: int) -> list:
+def multithread(function, args: list, max_active_processes: int = cpu_count() - 1) -> list:
     """
     Helper function to run multithread workflows.
 
@@ -74,7 +74,8 @@ def multithread(function, args: list, max_active_processes: int) -> list:
 
     """
     if max_active_processes > cpu_count():
-        raise ValueError('Cannot have more active processes ({}) than available CPUs ({})'.format(max_active_processes, cpu_count()))
+        raise ValueError(
+            'Cannot have more active processes ({}) than available CPUs ({})'.format(max_active_processes, cpu_count()))
 
     def mp_function(return_list: list, idx: int, *args):
         output = function(*args)
@@ -85,7 +86,7 @@ def multithread(function, args: list, max_active_processes: int) -> list:
 
         processes = list()
         for i, item in enumerate(args):
-            processes.append(Process(target=mp_function, args=(return_list, i, *args)))
+            processes.append(Process(target=mp_function, args=(return_list, i, *item)))
 
         active_process = set()
 
@@ -113,8 +114,8 @@ def multithread(function, args: list, max_active_processes: int) -> list:
         return [item[1] for item in sorted(return_list, key=lambda tup: tup[0])]
 
 
-def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                   optimizer: torch.optim.Optimizer, use_apex=False, amp=None, **kwargs):
+def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
+                    optimizer: torch.optim.Optimizer, use_apex=False, amp=None, **kwargs):
     """
     Packages network parameters into a picklable dictionary containing keys
     * epoch: current epoch
@@ -163,7 +164,7 @@ def get_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntro
 def save_model(filepath: str, data):
     """
     Saves a picklable checkpoint to disk
-    
+
     Parameters
     ----------
     filepath : str
@@ -180,7 +181,7 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
                loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, **kwargs):
     """
     Load a checkpointed model into memory by reference
-    
+
     Parameters
     ----------
     filepath : str

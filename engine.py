@@ -1,45 +1,48 @@
+import logging
 import math
 import time
 from typing import Union
 
-import logging
 import torch
-from torch import optim, nn
 from torch.nn import CrossEntropyLoss
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from bayesian import EWC
 from criterion import SplitCrossEntropyLoss
-from data import DataLoader
-from model import LSTM
+from laplace import _Prior
+from models.rnn import RNN
 from utils import detach
 
 log = logging.getLogger('zerolm')
 
 
-def train(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer,
-          loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-          use_apex=False, amp=None, clip=None, parameters: list = None, bptt: int = 125, alpha: float = 0.,
-          beta: float = 0., log_interval: int = 200, **kwargs):
+def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
+          loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], use_apex=False, amp=None,
+          lr_weights: dict = None,
+          bptt: int = 125, alpha: float = 0., beta: float = 0., log_interval: int = 200,
+          device: Union[torch.device, str] = 'cpu', **kwargs):
     total_loss = 0
-
     batch = 0
 
-    data_spec_count = sum([len(ds) for l, ds in dataloader.data.items()])
-    data_spec_avg = data_spec_count / len(dataloader.data.items())
-    data_spec_lrweights = dict([(l, data_spec_avg / len(ds)) for l, ds in dataloader.data.items()])
+    model.train()
 
     log.info('Starting training loop')
     start_time = time.time()
 
-    with tqdm(dataloader, dynamic_ncols=True) as pbar:
+    with tqdm(dataloader, total=len(dataloader)) as pbar:
         for data, targets, seq_len, lang in pbar:
-            hidden = model.init_hidden(dataloader.batchsize)
+
+            data = data.squeeze(0).to(device)
+            targets = targets.squeeze(0).to(device)
+
+            hidden = model.init_hidden(batchsize=data.size(-1))
 
             lr2 = optimizer.param_groups[0]['lr']
-            optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt * data_spec_lrweights[lang]
+            if lr_weights is not None:
+                optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt * lr_weights[lang.item()]
+            else:
+                optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt
 
-            model.train()
             hidden = detach(hidden)
             optimizer.zero_grad()
 
@@ -75,20 +78,20 @@ def train(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer,
                 elapsed = time.time() - start_time
                 log.debug(
                     '| {:5d}/{:5d} batches | lr {:05.5f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
-                        batch, data_spec_count // bptt, optimizer.param_groups[0]['lr'], elapsed * 1000 / log_interval,
+                        batch, len(dataloader), optimizer.param_groups[0]['lr'], elapsed * 1000 / log_interval,
                         cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
                 total_loss = 0
                 start_time = time.time()
 
             pbar.set_description('Training, end of batch {} | Loss {}'.format(batch, loss.data))
-            pbar.update(1)
+            # pbar.update(1)
 
 
-def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-             only_l: str = None, report_all: bool = False, **kwargs):
+def evaluate(dataloader: DataLoader, model: RNN, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
+             only_l: Union[torch.Tensor, int] = None, device: Union[torch.device, str] = 'cpu', **kwargs):
     model.eval()
 
-    languages = dataloader.data.keys()
+    languages = dataloader.dataset.data.keys()
     if only_l:
         if only_l not in languages:
             raise ValueError(f'Language {only_l} does not exist in the dataset')
@@ -99,14 +102,17 @@ def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCros
     batch = 0
     prev_lang = ""
 
-    with tqdm(dataloader, dynamic_ncols=True) as pbar:
+    with tqdm(dataloader, total=len(dataloader)) as pbar:
         for data, targets, seq_len, lang in pbar:
+            data = data.squeeze(0).to(device)
+            targets = targets.squeeze(0).to(device)
+
             if only_l and only_l != lang:
                 continue
 
             if prev_lang != lang:
                 prev_lang = lang
-                hidden = model.init_hidden(dataloader.batchsize)
+                hidden = model.init_hidden(batchsize=data.size(-1))
             else:
                 detach(hidden)
 
@@ -116,37 +122,33 @@ def evaluate(dataloader: DataLoader, model: LSTM, loss_function: Union[SplitCros
                     loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
                 else:
                     loss = loss_function(output, targets)
-                local_losses[lang] += len(data) * loss.data
+                local_losses[lang.item()] += len(data) * loss.data
 
             batch += 1
 
             pbar.set_description('Evaluation, finished batch {} | loss {}'.format(batch, loss.data))
 
-    avg_loss = {lang: local_losses[lang].item() / len(dataloader.data[lang]) for lang in languages}
+    avg_loss = {lang: local_losses[lang].item() / len(dataloader.dataset.data[lang]) for lang in languages}
     total_loss = sum(avg_loss.values())
 
-    if report_all:
-        langstr = corpus.dictionary.idx2lang[lang.item()]
-        print('=' * 89)
-        print('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-            langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2)))
-
-    return total_loss / len(languages)
+    return total_loss / len(languages), avg_loss
 
 
-def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer,
-           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], ewc: EWC, bptt: int, clip: int,
-           parameters: list, use_apex: bool = False, amp=None, alpha: float = 0, beta: float = 0,
-           importance: int = 100000):
-
+def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
+           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], prior: _Prior, bptt: int,
+           use_apex: bool = False,
+           amp=None, alpha: float = 0, beta: float = 0, importance: int = 100000,
+           device: Union[torch.device, str] = 'cpu'):
     model.train()
     batch = 0
-    with tqdm(dataloader, dynamic_ncols=True) as pbar:
+    with tqdm(dataloader, total=len(dataloader)) as pbar:
         for data, targets, seq_len, lang in pbar:
+            data = data.squeeze(0).to(device)
+            targets = targets.squeeze(0).to(device)
 
             lr2 = optimizer.param_groups[0]['lr']
             optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt
-            hidden = model.init_hidden(dataloader.batchsize)
+            hidden = model.init_hidden(batchsize=data.size(-1))
             optimizer.zero_grad()
 
             output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
@@ -155,7 +157,7 @@ def refine(dataloader: DataLoader, model: LSTM, optimizer: torch.optim.Optimizer
             else:
                 loss = loss_function(output, targets)
 
-            laplace = importance * ewc.penalty(model)
+            laplace = importance * prior.penalty(model)
             loss += laplace
 
             # Activiation Regularization

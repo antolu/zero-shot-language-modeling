@@ -5,10 +5,9 @@ def get_args():
     parser = ArgumentParser()
 
     # Arguments concerning the environment of the repository
-    parser.add_argument('--datadir', type=str, default='dataset',
+    parser.add_argument('--datadir', type=str, default='dataset/bibles_latin',
                         help='Path to the root directory containing the datasets.')
-    parser.add_argument('--dataset', type=str, default='latin',
-                        help='Which dataset to use', choices=['ipa', 'latin'])
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', dest='checkpoint_dir', help='The directory to save training checkpoints to')
     parser.add_argument('--checkpoint', type=str, default=None, help='path to pretrained-model')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
 
@@ -70,7 +69,7 @@ def get_args():
                         help='Which optimisation to use for mixed precision training.')
 
     # Not used currently. Might get implemented for parallelized data loading
-    parser.add_argument('--workers', default=8, type=int,
+    parser.add_argument('--workers', default=1, type=int,
                         help='Number of workers for training the network')
 
     # Early stopping arguments
