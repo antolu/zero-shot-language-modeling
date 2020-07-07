@@ -99,12 +99,10 @@ def main():
     dictionary = data_splits['dictionary']
 
     train_language_distr = get_sampling_probabilities(train_set, 0.8)
-    train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True, device=device,
+    train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True,
                         language_probabilities=train_language_distr)
-    val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True,
-                      device=device)
-    test_set = Dataset(test_set, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True,
-                       device=device)
+    val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True)
+    test_set = Dataset(test_set, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True)
 
     train_loader = DataLoader(train_set, num_workers=args.workers)
     val_loader = DataLoader(val_set, num_workers=args.workers)

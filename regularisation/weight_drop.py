@@ -32,11 +32,10 @@ class WeightDrop(Module):
         for name_param in self.weights_names_ls:
             param = getattr(self.module, f'{name_param}_raw')
             param_with_dropout = F.dropout(param, p=self.dropout, training=self.training)
-            # self.module._parameters[name_param] = param_with_dropout
             param_with_dropout = torch.nn.Parameter(param_with_dropout)
             setattr(self.module, name_param, param_with_dropout)
 
-        if isinstance(self, torch.nn.RNNBase):
+        if isinstance(self.module, torch.nn.RNNBase):
             self.module.flatten_parameters()
 
         return self.module.forward(*args)
@@ -81,7 +80,21 @@ if __name__ == '__main__':
     print('Run 1:', run1)
     print('Run 2:', run2)
 
+    loss_function = torch.nn.CrossEntropyLoss()
+
+    wdrnn.zero_grad()
+    output, hidden = wdrnn(x, h0)
+    # targets = torch.randint(10, (2, 10))
+    targets = torch.zeros((2, 10), dtype=torch.long)
+
+    loss = loss_function(output, targets)
+    loss.backward()
+
+    for n, p in wdrnn.named_parameters():
+        print(f'Parameter {n} has grad: {"yes" if p.grad is not None else "no"}')
+
     # First time step, not influenced by hidden to hidden weights, should be equal
     assert run1[0] == run2[0]
     # Second step should not
     assert run1[1] != run2[1]
+
