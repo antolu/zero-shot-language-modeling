@@ -16,7 +16,7 @@ from data import DataLoader
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
 LOG_DIR = 'logs'
-log = logging.getLogger('zerolm')
+log = logging.getLogger()
 log.setLevel(logging.DEBUG)
 
 fh = logging.FileHandler(path.join(LOG_DIR, f'zero_lm_{timestamp}.log'))
@@ -274,8 +274,7 @@ def main():
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
             final_loss = False
             refine_data = {lang: lang_data}
-            refine_data = Dataset(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt, device=device,
-                                  reset_on_iter=True)
+            refine_data = Dataset(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt, reset_on_iter=True)
             refine_dataloader = DataLoader(refine_data, num_workers=args.workers)
             load_model(best_model, **parameters)
 

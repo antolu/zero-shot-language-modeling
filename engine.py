@@ -13,7 +13,7 @@ from laplace import _Prior
 from models.rnn import RNN
 from utils import detach
 
-log = logging.getLogger('zerolm')
+log = logging.getLogger(__name__)
 
 
 def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,

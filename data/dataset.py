@@ -9,7 +9,7 @@ from tqdm import tqdm
 from . import create_batch, get_sampling_probabilities, SequenceSequencer
 
 import logging
-log = logging.getLogger('zerolm')
+log = logging.getLogger(__name__)
 
 
 class Dataset(_Dataset):
