@@ -38,7 +38,7 @@ from data import get_sampling_probabilities, Dataset, Corpus
 from engine import train, evaluate, refine
 from models import RNN
 from utils.parser import get_args
-from utils import make_checkpoint, save_model, load_model, DotDict
+from utils import make_checkpoint, load_model
 from regularisation import WeightDrop
 
 
@@ -142,7 +142,7 @@ def main():
 
     params = list(model.parameters()) + list(loss_function.parameters())
 
-    parameters = DotDict({
+    parameters = {
         'model': model,
         'optimizer': optimizer,
         'loss_function': loss_function,
@@ -154,7 +154,7 @@ def main():
         'beta': args.beta,
         'bptt': args.bptt,
         'device': device,
-    })
+    }
 
     if args.clip:
         if use_apex:

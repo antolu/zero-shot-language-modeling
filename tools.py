@@ -9,7 +9,7 @@ This script aims to simplify package installation and set up the local environme
 
 OPTIONS = [
     {
-        'shell': 'scripts/install_cuda.sh',
+        'shell': 'source scripts/tools.sh && installCUDA',
         'desc': 'Install CUDA',
         'tag': 'install_cuda',
     },
@@ -19,19 +19,18 @@ OPTIONS = [
         'tag': 'install_conda',
     },
     {
-        'shell': 'source tools.sh && installPythonPackages',
+        'shell': 'source scripts/tools.sh && installPythonPackages',
         'desc': 'Create a conda environment with all required packages',
         'tag': 'create_condaenv',
-        'depends': 'install_conda',
     },
     {
         'desc': 'Make required directories',
-        'shell': 'source tools.sh && makeDirectories',
+        'shell': 'source scripts/tools.sh && makeDirectories',
         'tag': 'mkdir',
     },
     {
         'desc': 'Get bibles dataset',
-        'shell': 'source tools.sh && getDataset',
+        'shell': 'source scripts/tools.sh && getDataset',
         'tag': 'get_dataset',
     }
 ]
@@ -63,7 +62,7 @@ def main():
         if 'depends' in option:
             handle_option(tag2idx[option['tag']]-1)
         if 'shell' in option:
-            shell(option['shell'])
+            shell('bash -c "{}"'.format(option['shell']))
         handled.append(option)
 
     for option in options:
