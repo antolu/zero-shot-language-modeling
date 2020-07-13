@@ -213,9 +213,9 @@ def main():
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
-                filename = path.join(args.dir_model,
+                filename = path.join(args.checkpoint_dir,
                                      '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''))
-                save_model(filename, make_checkpoint(epoch + 1, **parameters))
+                torch.save(make_checkpoint(epoch + 1, **parameters), filename)
                 saved_models.append(filename)
 
                 # Early stopping
@@ -243,9 +243,9 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
-            save_model(path.join(args.checkpoint_dir,
+            torch.save(make_checkpoint(epoch, **parameters), path.join(args.checkpoint_dir,
                                  '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
-                       make_checkpoint(epoch, **parameters))
+                       )
             return
     elif args.test:
         test()
