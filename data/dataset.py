@@ -207,7 +207,6 @@ def make_batches(data: dict, language_probabilities: torch.Tensor = None, bptt: 
     for language, language_data in data.items():
         approx_iters += ceil(language_data.size(0) / bptt)
 
-    log.debug('Precalculating batches for data loading')
     while True:
         try:
             language = get_lang()

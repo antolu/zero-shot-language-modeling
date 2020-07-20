@@ -15,7 +15,9 @@ def get_args():
     parser.add_argument('--train', action='store_true', help='Train the model')
     parser.add_argument('--test', action='store_true', help='Test the model')
     parser.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
-    parser.add_argument('--laplace', action='store_true', help='Use laplacian regularisation')
+
+    parser.add_argument('--prior', choices=['ninf', 'laplace', 'vi', 'hmc'], default='ninf',
+                        help='Which technique to use for inference of the universal prior')
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument('--start-epoch', default=1, type=int, dest='start_epoch',
@@ -39,7 +41,7 @@ def get_args():
     # Arguments concerning the model
     parser.add_argument('--cond-type', type=str, dest='cond_type', default='None',
                         choices=['none', 'platanios', 'sutskever', 'oestling'],
-                        help='Which condition type to use for training the model.')
+                        help='Which condFrais de dossiers : compris dans la commissionition type to use for training the model.')
     parser.add_argument('--nhidden', type=int, default=1150, help='Number of hidden units in the LSTM.')
     parser.add_argument('--emsize', type=int, default=400, help='The size of the embeddings in the LSTM.')
     parser.add_argument('--nlayers', type=int, default=3, help='Number of layers in the LSTM')

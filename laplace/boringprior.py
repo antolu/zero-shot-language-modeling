@@ -2,10 +2,10 @@ from typing import Union
 
 import torch
 
-from laplace.prior import _Prior
+from laplace.prior import Prior
 
 
-class GaussianPrior(_Prior):
+class GaussianPrior(Prior):
     """
     A prior with a penalty corresponding to a Gaussian.
     """

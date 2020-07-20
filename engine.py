@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
-from laplace import _Prior
+from laplace import Prior, VIPrior
 from models.rnn import RNN
 from utils import detach
 
@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 
 def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], use_apex=False, amp=None,
-          lr_weights: dict = None,
-          bptt: int = 125, alpha: float = 0., beta: float = 0., log_interval: int = 200,
+          lr_weights: dict = None, prior: str = 'ninf',
+          bptt: int = 125, alpha: float = 0., beta: float = 0., log_interval: int = 200, n_samples: int = 20,
           device: Union[torch.device, str] = 'cpu', **kwargs):
     total_loss = 0
     batch = 0
@@ -46,7 +46,21 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             hidden = detach(hidden)
             optimizer.zero_grad()
 
-            output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
+            if isinstance(prior, VIPrior):
+                outputs = [[], [], [], []]
+
+                for s in range(n_samples):
+                    output = model(data, hidden, lang, return_h=True)
+                    for i, o in enumerate(output):
+                        outputs[i].append(o)
+
+                output = sum(outputs[0]) / n_samples
+                hidden = sum(outputs[1]) / n_samples
+                rnn_hs = sum(outputs[2]) / n_samples
+                dropped_rnn_hs = sum(outputs[3]) / n_samples
+            else:
+                output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
+
             if isinstance(loss_function, SplitCrossEntropyLoss):
                 raw_loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
             else:
@@ -58,6 +72,9 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             # Temporal Activation Regularization (slowness)
             if beta:
                 loss = loss + sum(beta * (rnn_h[1:] - rnn_h[:-1]).pow(2).mean() for rnn_h in rnn_hs[-1:])
+
+            if isinstance(prior, VIPrior):
+                loss += prior.kl_div()
 
             if use_apex:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -135,7 +152,7 @@ def evaluate(dataloader: DataLoader, model: RNN, loss_function: Union[SplitCross
 
 
 def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
-           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], prior: _Prior, bptt: int,
+           loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], prior: Prior, bptt: int,
            use_apex: bool = False,
            amp=None, alpha: float = 0, beta: float = 0, importance: int = 100000,
            device: Union[torch.device, str] = 'cpu', **kwargs):

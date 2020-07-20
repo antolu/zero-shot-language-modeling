@@ -32,7 +32,7 @@ ch.setFormatter(formatter)
 log.addHandler(fh)
 log.addHandler(ch)
 
-from laplace import GaussianPrior, LaplacePrior
+from laplace import GaussianPrior, LaplacePrior, VIPrior
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus
 from engine import train, evaluate, refine
@@ -154,6 +154,7 @@ def main():
         'beta': args.beta,
         'bptt': args.bptt,
         'device': device,
+        'prior': args.prior,
     }
 
     if args.clip:
@@ -185,12 +186,21 @@ def main():
 
     saved_models = list()
 
+    if args.prior == 'vi':
+        prior = VIPrior(model, device=device)
+        parameters['prior'] = prior
+
+        def sample_weights(module: torch.nn.Module):
+            prior.sample_weights(module)
+
+        sample_weights_hook = model.register_forward_pre_hook(sample_weights)
+
     def test():
-        log.info('-' * 89)
+        log.info('=' * 89)
         log.info('Running test set...')
         test_loss, _ = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
-        log.info('-' * 89)
+        log.info('=' * 89)
 
     if args.train:
         f = 1.
@@ -207,6 +217,7 @@ def main():
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
+
                 train(train_loader, lr_weights=data_spec_lrweights, **parameters)
 
                 val_loss, _ = evaluate(val_loader, **parameters)
@@ -255,21 +266,41 @@ def main():
         exit(0)
 
     # If use UNIV, calculate informed prior, else use boring prior
-    if args.laplace:
+    if args.prior == 'laplace':
         log.info('Creating laplace approximation dataset')
         laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
         laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
-        prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp, device=device)
+        parameters['prior'] = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp, device=device)
+    elif args.prior == 'ninf':
+        parameters['prior'] = GaussianPrior()
+    elif args.prior == 'vi':
+        pass
+    elif args.prior == 'hmc':
+        raise NotImplementedError
     else:
-        prior = GaussianPrior()
+        raise ValueError(f'Passed prior {args.prior} is not an implemented inference technique.')
 
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
+
+    # Remove sampling hook from model
+    if args.prior == 'vi':
+        sample_weights_hook.remove()
 
     # Refine on 100 samples on each target
     if args.refine:
         # reset learning rate
         optimizer.param_groups[0]['lr'] = args.lr
         loss = 0
+
+        result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
+        results = dict()
+
+        # Create individual tests sets
+        test_sets = dict()
+        for lang, lang_d in data_splits['test'].items():
+            test_sets[lang] = DataLoader(
+                Dataset({lang: lang_d}, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True),
+                num_workers=args.workers)
 
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
             final_loss = False
@@ -278,25 +309,30 @@ def main():
 
             log.info(f'Refining for language {dictionary.idx2lang[lang]}')
             for epoch in range(1, args.refine_epochs + 1):
-                refine(refine_dataloader, prior=prior, **parameters, importance=10000 if args.laplace else 1e-5)
+                refine(refine_dataloader, **parameters, importance=10000 if args.prior != 'ninf' else 1e-5)
                 if epoch % 5 == 0:
                     final_loss = True
-                    loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True, device=device)
+                    loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True, device=device)
 
                     for lang, avg_l_loss in avg_loss.items():
                         langstr = dictionary.idx2lang[lang]
-                        log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                            langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
-                        )
+                        log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
 
             if not final_loss:
-                loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+                loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True, device=device)
 
             for lang, avg_l_loss in avg_loss.items():
                 langstr = dictionary.idx2lang[lang]
-                log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                    langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
-                )
+                log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                results[lang] = avg_l_loss
+
+        log.info('='*89)
+        log.info('FINAL FEW SHOT RESULTS: ')
+        log.info('='*89)
+        for lang, avg_l_loss in results.items():
+            langstr = dictionary.idx2lang[lang]
+            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+        log.info('='*89)
 
 
 if __name__ == "__main__":
