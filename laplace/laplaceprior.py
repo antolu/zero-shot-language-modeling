@@ -58,8 +58,8 @@ class LaplacePrior:
 
         with tqdm(self.dataloader, dynamic_ncols=True) as pbar:
             for inputs, targets, seq_len, lang in pbar:
-                inputs.squeeze(0).to(self.device)
-                targets.squeeze(0).to(self.device)
+                inputs = inputs.squeeze(0).to(self.device)
+                targets = targets.squeeze(0).to(self.device)
 
                 hidden = self.model.init_hidden(inputs.size(-1))
                 self.model.zero_grad()

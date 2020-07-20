@@ -128,7 +128,7 @@ def evaluate(dataloader: DataLoader, model: RNN, loss_function: Union[SplitCross
 
             pbar.set_description('Evaluation, finished batch {} | loss {}'.format(batch, loss.data))
 
-    avg_loss = {lang: local_losses[lang].item() / len(dataloader.dataset.data[lang]) for lang in languages}
+    avg_loss = {lang: local_losses[lang].item() / len(dataloader.dataset.data[lang]) for lang in languages} if only_l is None else {only_l: local_losses[only_l].item() / len(dataloader.dataset.data[only_l])}
     total_loss = sum(avg_loss.values())
 
     return total_loss / len(languages), avg_loss
@@ -138,7 +138,7 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
            loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], prior: _Prior, bptt: int,
            use_apex: bool = False,
            amp=None, alpha: float = 0, beta: float = 0, importance: int = 100000,
-           device: Union[torch.device, str] = 'cpu'):
+           device: Union[torch.device, str] = 'cpu', **kwargs):
     model.train()
     batch = 0
     with tqdm(dataloader, total=len(dataloader)) as pbar:

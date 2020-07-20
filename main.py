@@ -25,7 +25,7 @@ fh.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
 
-formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(message)s', "%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
 fh.setFormatter(formatter)
 ch.setFormatter(formatter)
 
@@ -188,7 +188,7 @@ def main():
     def test():
         log.info('-' * 89)
         log.info('Running test set...')
-        test_loss = evaluate(test_loader, **parameters)
+        test_loss, _ = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
         log.info('-' * 89)
 
@@ -209,7 +209,7 @@ def main():
             for epoch in pbar:
                 train(train_loader, lr_weights=data_spec_lrweights, **parameters)
 
-                val_loss = evaluate(val_loader, **parameters)
+                val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
@@ -273,9 +273,7 @@ def main():
 
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
             final_loss = False
-            refine_data = {lang: lang_data}
-            refine_data = Dataset(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt, reset_on_iter=True)
-            refine_dataloader = DataLoader(refine_data, num_workers=args.workers)
+            refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
             load_model(best_model, **parameters)
 
             log.info(f'Refining for language {dictionary.idx2lang[lang]}')
@@ -283,20 +281,22 @@ def main():
                 refine(refine_dataloader, prior=prior, **parameters, importance=10000 if args.laplace else 1e-5)
                 if epoch % 5 == 0:
                     final_loss = True
-                    loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+                    loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True, device=device)
 
-                    langstr = dictionary.idx2lang[lang.item()]
-                    log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                        langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
-                    )
+                    for lang, avg_l_loss in avg_loss.items():
+                        langstr = dictionary.idx2lang[lang]
+                        log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                            langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+                        )
 
             if not final_loss:
                 loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
 
-            langstr = dictionary.idx2lang[lang.item()]
-            log.debug('Final loss: | Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
-            )
+            for lang, avg_l_loss in avg_loss.items():
+                langstr = dictionary.idx2lang[lang]
+                log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                    langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+                )
 
 
 if __name__ == "__main__":
