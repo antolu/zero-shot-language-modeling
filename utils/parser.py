@@ -38,6 +38,11 @@ def get_args():
     parser.add_argument('--no-seed', action='store_true', dest='no_seed', help='Do not set a random seed.')
     parser.add_argument('--seed', type=int, default=1111, help='Random seed')
 
+    parser.add_argument("--n-samples", dest='n_samples', default=4, type=int,
+                        help="Number of samples in the Bayesian mode.")
+    parser.add_argument("--scaling", default='uniform', type=str, choices=['uniform', 'linear_annealing', 'logistic_annealing'],
+                        help="Scaling for KL term in VI.")
+
     # Arguments concerning the model
     parser.add_argument('--cond-type', type=str, dest='cond_type', default='None',
                         choices=['none', 'platanios', 'sutskever', 'oestling'],

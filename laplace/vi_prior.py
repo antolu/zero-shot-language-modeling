@@ -21,10 +21,11 @@ def softrelu(x: torch.Tensor):
     return torch.log1p(torch.exp(x))
 
 
-def kl_div(mu: torch.Tensor, sigma2: torch.Tensor):
+def kl_div(mu: torch.Tensor, log_var: torch.Tensor):
     prior_sigma = 1
-    kl = math.log(prior_sigma) - torch.log(sigma2).sum() - mu.numel() + ((sigma2 + mu**2) / prior_sigma)
-    return 0.5 * kl.sum()
+    kl = math.log(prior_sigma) - log_var.sum() - mu.numel() + ((log_var.exp() + mu ** 2).sum() / prior_sigma)
+    kl = 0.5 * kl
+    return kl
 
 
 class VIPrior(Prior):
@@ -33,11 +34,11 @@ class VIPrior(Prior):
         self.model = model
         self.device = device
 
-        self.noise = torch.distributions.normal.Normal(loc=0, scale=1)
+        self.noise = torch.distributions.normal.Normal(loc=torch.tensor(0.).to(device), scale=torch.tensor(1.).to(device))
 
         self.params = [n for n, p in self.model.named_parameters() if p.requires_grad]
         self._means = {n: nn.Parameter(torch.zeros_like(p)) for n, p in model.named_parameters() if p.requires_grad}
-        self._log_variance = {n: nn.Parameter(torch.zeros_like(p)) for n, p in model.named_parameters() if p.requires_grad}
+        self._log_variance = {n: nn.Parameter(torch.ones_like(p)) for n, p in model.named_parameters() if p.requires_grad}
 
     def kl_div(self) -> torch.Tensor:
         kl = 0

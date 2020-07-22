@@ -10,16 +10,27 @@ from pprint import pformat
 import torch
 import tqdm
 from torch.optim import Adam
+from torch.utils.tensorboard import SummaryWriter
 
-from data import DataLoader
+from laplace import GaussianPrior, LaplacePrior, VIPrior
+from criterion import SplitCrossEntropyLoss
+from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
+from engine import train, evaluate, refine
+from models import RNN
+from utils.parser import get_args
+from utils import make_checkpoint, load_model
+from regularisation import WeightDrop
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
 LOG_DIR = 'logs'
+writer_dir = path.join(LOG_DIR, f'zerolm_{timestamp}')
+tb_writer = SummaryWriter(writer_dir)
+
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
 
-fh = logging.FileHandler(path.join(LOG_DIR, f'zero_lm_{timestamp}.log'))
+fh = logging.FileHandler(path.join(writer_dir, 'log.log'))
 fh.setLevel(logging.DEBUG)
 
 ch = logging.StreamHandler()
@@ -31,15 +42,6 @@ ch.setFormatter(formatter)
 
 log.addHandler(fh)
 log.addHandler(ch)
-
-from laplace import GaussianPrior, LaplacePrior, VIPrior
-from criterion import SplitCrossEntropyLoss
-from data import get_sampling_probabilities, Dataset, Corpus
-from engine import train, evaluate, refine
-from models import RNN
-from utils.parser import get_args
-from utils import make_checkpoint, load_model
-from regularisation import WeightDrop
 
 
 def main():
@@ -60,7 +62,7 @@ def main():
         log.info('Using FP32')
         amp = None
 
-    log.info(f'Using time stamp {timestamp} to save models.')
+    log.info(f'Using time stamp {timestamp} to save models and logs.')
 
     if not args.no_seed:
         log.info(f'Setting random seed to {args.seed} for reproducibility.')
@@ -140,13 +142,10 @@ def main():
     if use_apex:
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
 
-    params = list(model.parameters()) + list(loss_function.parameters())
-
     parameters = {
         'model': model,
         'optimizer': optimizer,
         'loss_function': loss_function,
-        'parameters': params,
         'use_apex': use_apex,
         'amp': amp if use_apex else None,
         'clip': args.clip,
@@ -157,6 +156,7 @@ def main():
         'prior': args.prior,
     }
 
+    # Add backward hook for gradient clipping
     if args.clip:
         if use_apex:
             for p in amp.master_params(optimizer):
@@ -164,6 +164,15 @@ def main():
         else:
             for p in model.parameters():
                 p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+
+    if args.prior == 'vi':
+        prior = VIPrior(model, device=device)
+        parameters['prior'] = prior
+
+        def sample_weights(module: torch.nn.Module, input: torch.Tensor):
+            prior.sample_weights(module)
+
+        sample_weights_hook = model.register_forward_pre_hook(sample_weights)
 
     # Load model checkpoint if available
     start_epoch = 1
@@ -186,20 +195,19 @@ def main():
 
     saved_models = list()
 
-    if args.prior == 'vi':
-        prior = VIPrior(model, device=device)
-        parameters['prior'] = prior
-
-        def sample_weights(module: torch.nn.Module):
-            prior.sample_weights(module)
-
-        sample_weights_hook = model.register_forward_pre_hook(sample_weights)
+    result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
 
     def test():
         log.info('=' * 89)
-        log.info('Running test set...')
-        test_loss, _ = evaluate(test_loader, **parameters)
+        log.info('Running test set (zero-shot results)...')
+        test_loss, avg_loss = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
+
+        for lang, avg_l_loss in avg_loss.items():
+            langstr = dictionary.idx2lang[lang]
+            log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+            results[lang] = avg_l_loss
+
         log.info('=' * 89)
 
     if args.train:
@@ -214,18 +222,25 @@ def main():
         data_spec_avg = data_spec_count / len(train_set.data.items())
         data_spec_lrweights = dict([(l, data_spec_avg / len(ds)) for l, ds in train_set.data.items()])
 
+        # estimate total number of steps
+        total_steps = sum([len(ds) // args.bptt for l, ds in train_set.data.items()]) * args.no_epochs
+        steps = 0
+
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
 
-                train(train_loader, lr_weights=data_spec_lrweights, **parameters)
+                steps = train(train_loader, lr_weights=data_spec_lrweights, **parameters,
+                              total_steps=total_steps, steps=steps,
+                              scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer)
 
                 val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
                 filename = path.join(args.checkpoint_dir,
-                                     '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''))
+                                     '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''),
+                                     args.prior)
                 torch.save(make_checkpoint(epoch + 1, **parameters), filename)
                 saved_models.append(filename)
 
@@ -254,9 +269,10 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
-            torch.save(make_checkpoint(epoch, **parameters), path.join(args.checkpoint_dir,
-                                 '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
-                       )
+            torch.save(make_checkpoint(epoch, **parameters),
+                       path.join(args.checkpoint_dir,
+                                 '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
+                                                              args.prior)))
             return
     elif args.test:
         test()
@@ -270,8 +286,11 @@ def main():
         log.info('Creating laplace approximation dataset')
         laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
         laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
-        parameters['prior'] = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp, device=device)
+        log.info('Creating Laplacian prior')
+        parameters['prior'] = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
+                                           device=device)
     elif args.prior == 'ninf':
+        log.info('Creating non-informative Gaussian prior')
         parameters['prior'] = GaussianPrior()
     elif args.prior == 'vi':
         pass
@@ -292,7 +311,6 @@ def main():
         optimizer.param_groups[0]['lr'] = args.lr
         loss = 0
 
-        result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
         results = dict()
 
         # Create individual tests sets
@@ -312,27 +330,30 @@ def main():
                 refine(refine_dataloader, **parameters, importance=10000 if args.prior != 'ninf' else 1e-5)
                 if epoch % 5 == 0:
                     final_loss = True
-                    loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True, device=device)
+                    loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
+                                              device=device)
 
                     for lang, avg_l_loss in avg_loss.items():
                         langstr = dictionary.idx2lang[lang]
-                        log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                        log.debug(
+                            result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
 
             if not final_loss:
-                loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True, device=device)
+                loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
+                                          device=device)
 
             for lang, avg_l_loss in avg_loss.items():
                 langstr = dictionary.idx2lang[lang]
                 log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
                 results[lang] = avg_l_loss
 
-        log.info('='*89)
+        log.info('=' * 89)
         log.info('FINAL FEW SHOT RESULTS: ')
-        log.info('='*89)
+        log.info('=' * 89)
         for lang, avg_l_loss in results.items():
             langstr = dictionary.idx2lang[lang]
             log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
-        log.info('='*89)
+        log.info('=' * 89)
 
 
 if __name__ == "__main__":
