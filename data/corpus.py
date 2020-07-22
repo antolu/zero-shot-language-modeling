@@ -134,6 +134,7 @@ class Corpus:
                 split['languages'] = included_langs
                 split['ignore_missing'] = True
 
+        # make sure that all the languages exist before attempting to load
         for split in splits:
             for language in split['languages']:
                 if language not in self.data:
@@ -144,10 +145,11 @@ class Corpus:
                     else:
                         raise ValueError(f'Language {language} does not exist in memory.')
 
+        # make sure all splits for each requested language exists before attempting to load
         for split in splits:
             for language in split['languages']:
                 if split['split'] not in self.data[language]:
-                    if ignore_missing:
+                    if ignore_missing or ('ignore_missing' in split and split['ignore_missing']):
                         log.warning(
                             f'Split {split["split"]} does not exist for language {language}. Skipping language.')
                         split['languages'].remove(language)
