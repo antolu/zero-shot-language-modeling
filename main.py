@@ -206,7 +206,6 @@ def main():
         for lang, avg_l_loss in avg_loss.items():
             langstr = dictionary.idx2lang[lang]
             log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
-            results[lang] = avg_l_loss
 
         log.info('=' * 89)
 
@@ -238,11 +237,17 @@ def main():
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
+                if args.prior == 'vi':
+                    sample_weights_hook.remove()
+
                 filename = path.join(args.checkpoint_dir,
-                                     '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''),
-                                     args.prior)
+                                     '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
+                                     args.prior))
                 torch.save(make_checkpoint(epoch + 1, **parameters), filename)
                 saved_models.append(filename)
+
+                if args.prior == 'vi':
+                    sample_weights_hook = model.register_forward_pre_hook(sample_weights)
 
                 # Early stopping
                 if val_loss < stored_loss:
@@ -268,6 +273,9 @@ def main():
         except KeyboardInterrupt:
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
+
+            if args.prior == 'vi':
+                sample_weights_hook.remove()
 
             torch.save(make_checkpoint(epoch, **parameters),
                        path.join(args.checkpoint_dir,

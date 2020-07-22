@@ -97,11 +97,11 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
                 loss.backward()
 
             if tb_writer is not None:
-                tb_writer.add_scalar('train/loss', tr_loss, total_steps)
+                tb_writer.add_scalar('train/loss', tr_loss, steps)
 
                 if isinstance(prior, VIPrior):
-                    tb_writer.add_scalar('train/kl', tr_kl, total_steps)
-                    tb_writer.add_scalar('train/loss+kl', loss.item(), total_steps)
+                    tb_writer.add_scalar('train/kl', tr_kl, steps)
+                    tb_writer.add_scalar('train/loss+kl', loss.item(), steps)
 
             optimizer.step()
 
