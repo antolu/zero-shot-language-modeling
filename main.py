@@ -113,8 +113,7 @@ def main():
     if args.refine:
         refine_set = dict()
         for lang, lang_d in data_splits['train_100'].items():
-            refine_set[lang] = Dataset({lang: lang_d}, batchsize=args.valid_batchsize, bptt=args.bptt,
-                                       reset_on_iter=True)
+            refine_set[lang] = Dataset({lang: lang_d}, batchsize=args.valid_batchsize, bptt=args.bptt, make_config=True)
 
     n_token = len(dictionary.idx2tkn)
 
@@ -131,13 +130,14 @@ def main():
                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
+    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     else:
-        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
-
-    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
-    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(loss_function.parameters())
+        optimizer = Adam(params, lr=args.lr, weight_decay=args.wdecay)
 
     if use_apex:
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
@@ -205,7 +205,7 @@ def main():
 
         for lang, avg_l_loss in avg_loss.items():
             langstr = dictionary.idx2lang[lang]
-            log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
 
         log.info('=' * 89)
 
@@ -289,6 +289,8 @@ def main():
     if not args.target_langs:
         exit(0)
 
+    importance = 1e-5
+
     # If use UNIV, calculate informed prior, else use boring prior
     if args.prior == 'laplace':
         log.info('Creating laplace approximation dataset')
@@ -297,11 +299,12 @@ def main():
         log.info('Creating Laplacian prior')
         parameters['prior'] = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
                                            device=device)
+        importance = 1e5
     elif args.prior == 'ninf':
         log.info('Creating non-informative Gaussian prior')
         parameters['prior'] = GaussianPrior()
     elif args.prior == 'vi':
-        pass
+        importance = 1e-5
     elif args.prior == 'hmc':
         raise NotImplementedError
     else:
@@ -335,7 +338,7 @@ def main():
 
             log.info(f'Refining for language {dictionary.idx2lang[lang]}')
             for epoch in range(1, args.refine_epochs + 1):
-                refine(refine_dataloader, **parameters, importance=10000 if args.prior != 'ninf' else 1e-5)
+                refine(refine_dataloader, **parameters, importance=importance)
                 if epoch % 5 == 0:
                     final_loss = True
                     loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
@@ -352,7 +355,7 @@ def main():
 
             for lang, avg_l_loss in avg_loss.items():
                 langstr = dictionary.idx2lang[lang]
-                log.debug(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
                 results[lang] = avg_l_loss
 
         log.info('=' * 89)

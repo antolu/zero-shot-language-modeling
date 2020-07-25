@@ -43,9 +43,9 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
 
             lr2 = optimizer.param_groups[0]['lr']
             if lr_weights is not None:
-                optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt * lr_weights[lang.item()]
+                optimizer.param_groups[0]['lr'] = lr2 * seq_len.item() / bptt * lr_weights[lang.item()]
             else:
-                optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt
+                optimizer.param_groups[0]['lr'] = lr2 * seq_len.item() / bptt
 
             hidden = detach(hidden)
             optimizer.zero_grad()
@@ -177,7 +177,7 @@ def evaluate(dataloader: DataLoader, model: RNN, loss_function: Union[SplitCross
 def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
            loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], prior: Prior, bptt: int,
            use_apex: bool = False,
-           amp=None, alpha: float = 0, beta: float = 0, importance: int = 100000,
+           amp=None, alpha: float = 0, beta: float = 0, importance: Union[int, float] = 100000,
            device: Union[torch.device, str] = 'cpu', **kwargs):
     model.train()
     batch = 0
@@ -197,8 +197,8 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             else:
                 loss = loss_function(output, targets)
 
-            laplace = importance * prior.penalty(model)
-            loss += laplace
+            penalty = importance * prior.penalty(model)
+            loss += penalty
 
             # Activiation Regularization
             if alpha:
@@ -220,4 +220,4 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             batch += 1
 
             pbar.set_description(
-                'Loss {:5.2f} | bpc {:9.3f} | laplace {} |'.format(loss, loss / math.log(2), laplace.item()))
+                'Loss {:5.2f} | bpc {:9.3f} | penalty {} |'.format(loss, loss / math.log(2), penalty.item()))
