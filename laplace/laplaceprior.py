@@ -24,7 +24,7 @@ class LaplacePrior(Prior):
 
         params = {n: p for n, p in model.named_parameters() if p.requires_grad}
         self._means = {}
-        # self._precision_matrices = _diag_fisher(model, loss_function, dataloader, optimizer, amp, device)
+        self._precision_matrices = _diag_fisher(model, loss_function, dataloader, optimizer, amp, device)
 
         for n, p in params.items():
             self._means[n] = p.clone().detach()
