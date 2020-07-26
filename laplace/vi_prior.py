@@ -30,6 +30,7 @@ def kl_div(mu: torch.Tensor, log_var: torch.Tensor):
 
 class VIPrior(Prior):
     def __init__(self, model: torch.nn.Module, device: Union[torch.device, str] = 'cpu', **kwargs):
+        super(VIPrior, self).__init__()
 
         self.model = model
         self.device = device

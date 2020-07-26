@@ -187,7 +187,7 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             targets = targets.squeeze(0).to(device)
 
             lr2 = optimizer.param_groups[0]['lr']
-            optimizer.param_groups[0]['lr'] = lr2 * seq_len / bptt
+            optimizer.param_groups[0]['lr'] = lr2 * seq_len.item() / bptt
             hidden = model.init_hidden(batchsize=data.size(-1))
             optimizer.zero_grad()
 

@@ -293,13 +293,21 @@ def main():
 
     # If use UNIV, calculate informed prior, else use boring prior
     if args.prior == 'laplace':
-        log.info('Creating laplace approximation dataset')
-        laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
-        laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
-        log.info('Creating Laplacian prior')
-        parameters['prior'] = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
-                                           device=device)
+        if not isinstance(prior, LaplacePrior):  # only calculate matrix if it is not supplied.
+            log.info('Creating laplace approximation dataset')
+            laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
+            laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
+            log.info('Creating Laplacian prior')
+            prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
+                                               device=device)
+            parameters['prior'] = prior
+
+            torch.save(make_checkpoint('fisher_matrix', **parameters),
+                       path.join(args.checkpoint_dir,
+                                 '{}_fishers_matrix{}_{}.pth'.format(timestamp, '_with_apex' if use_apex else '',
+                                                              args.prior)))
         importance = 1e5
+
     elif args.prior == 'ninf':
         log.info('Creating non-informative Gaussian prior')
         parameters['prior'] = GaussianPrior()

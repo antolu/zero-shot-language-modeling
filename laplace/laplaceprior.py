@@ -4,86 +4,30 @@ from copy import deepcopy
 from typing import Union
 
 import torch
+from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
+from .prior import Prior
 from regularisation import LockedDropout, WeightDrop
 
 log = logging.getLogger(__name__)
 
 
-class LaplacePrior:
+class LaplacePrior(Prior):
     def __init__(self, model: torch.nn.Module, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
                  dataloader: DataLoader, use_apex: bool = False, amp=None, optimizer: torch.optim.Optimizer = None,
                  device: Union[torch.device, str] = 'cpu'):
+        super(LaplacePrior, self).__init__()
 
-        self.model = model
-        self.loss_function = loss_function
-        self.dataloader = dataloader
-        self.use_apex = use_apex
-        self.amp = amp
-        self.optimizer = optimizer
-        self.device = device
-
-        self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
         self._means = {}
-        self._precision_matrices = self._diag_fisher()
+        # self._precision_matrices = _diag_fisher(model, loss_function, dataloader, optimizer, amp, device)
 
-        for n, p in deepcopy(self.params).items():
+        for n, p in params.items():
             self._means[n] = p.clone().detach()
-
-    def _diag_fisher(self):
-        precision_matrices = {}
-        for n, p in deepcopy(self.params).items():
-            p.data.zero_()
-            precision_matrices[n] = p.clone().detach()
-
-        # need to be in train mode to calculate gradients
-        self.model.train()
-
-        # deactivate dropout to calculate full gradients
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.Dropout):
-                m.p = 0
-                print(m)
-            elif isinstance(m, LockedDropout) or isinstance(m, WeightDrop):
-                m.dropout = 0
-                print(m)
-
-        batch = 0
-        log.info("Starting calculation of Fisher's matrix")
-        start_time = time.time()
-
-        with tqdm(self.dataloader, dynamic_ncols=True) as pbar:
-            for inputs, targets, seq_len, lang in pbar:
-                inputs = inputs.squeeze(0).to(self.device)
-                targets = targets.squeeze(0).to(self.device)
-
-                hidden = self.model.init_hidden(inputs.size(-1))
-                self.model.zero_grad()
-                output, hidden = self.model(inputs, hidden, lang)
-
-                loss = self.loss_function(self.model.decoder.weight, self.model.decoder.bias, output, targets)
-                if self.use_apex and self.optimizer:
-                    with self.amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    loss.backward()
-
-                batch += 1
-
-                pbar.update(1)
-
-                for n, p in self.params.items():
-                    if p.grad is not None:
-                        precision_matrices[n].data += p.grad.data ** 2
-
-        precision_matrices = {n: p / batch for n, p in precision_matrices.items()}
-        log.info("Finished calculation of Fisher's matrix, it took {} minutes".format(
-            (time.time() - start_time) / 1000 / 60))
-        return precision_matrices
 
     def penalty(self, model, *args) -> Union[torch.Tensor, int]:
         loss = 0
@@ -92,3 +36,58 @@ class LaplacePrior:
                 _loss = self._precision_matrices[n] * (p - self._means[n]) ** 2
                 loss += _loss.sum()
         return loss
+
+
+def _diag_fisher(model: nn.Module, loss_function: torch.nn.modules.loss._Loss,
+                 dataloader: DataLoader, optimizer: torch.optim.Optimizer, amp=None, device: Union[torch.device, str] = 'cpu'):
+    precision_matrices = {}
+
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+    for n, p in params.items():
+        p.data.zero_()
+        precision_matrices[n] = p.clone().detach()
+
+    # need to be in train mode to calculate gradients
+    model.train()
+
+    # deactivate dropout to calculate full gradients
+    for m in model.modules():
+        if isinstance(m, torch.nn.Dropout):
+            m.p = 0
+            print(m)
+        elif isinstance(m, LockedDropout) or isinstance(m, WeightDrop):
+            m.dropout = 0
+            print(m)
+
+    batch = 0
+    log.info("Starting calculation of Fisher's matrix")
+    start_time = time.time()
+
+    with tqdm(dataloader, dynamic_ncols=True) as pbar:
+        for inputs, targets, seq_len, lang in pbar:
+            inputs = inputs.squeeze(0).to(device)
+            targets = targets.squeeze(0).to(device)
+
+            hidden = model.init_hidden(inputs.size(-1))
+            model.zero_grad()
+            output, hidden = model(inputs, hidden, lang)
+
+            loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
+            if amp is not None and optimizer is not None:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
+
+            batch += 1
+
+            pbar.update(1)
+
+            for n, p in params.items():
+                if p.grad is not None:
+                    precision_matrices[n].data += p.grad.data ** 2
+
+    precision_matrices = dict([(n, p / batch) for n, p in precision_matrices.items()])
+    log.info("Finished calculation of Fisher's matrix, it took {} minutes".format(
+        (time.time() - start_time) / (1000 / 60)))
+    return precision_matrices
