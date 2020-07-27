@@ -10,6 +10,7 @@ from pprint import pformat
 import torch
 import tqdm
 from torch.optim import Adam
+from torch.nn.modules import CrossEntropyLoss
 from torch.utils.tensorboard import SummaryWriter
 
 from laplace import GaussianPrior, LaplacePrior, VIPrior
@@ -130,8 +131,10 @@ def main():
                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
-    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
-    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+    if args.opt_level != 'O2':
+        loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+    else:
+        loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
 
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
@@ -140,7 +143,7 @@ def main():
         optimizer = Adam(params, lr=args.lr, weight_decay=args.wdecay)
 
     if use_apex:
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.opt_level)
 
     parameters = {
         'model': model,

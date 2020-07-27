@@ -72,7 +72,7 @@ def get_args():
     # Mixed precision settings
     parser.add_argument('--fp16', action='store_true',
                         help='Whether to use FP16 or FP32 in training.')
-    parser.add_argument('--opt-level', dest='opt_level', type=str, default='O1',
+    parser.add_argument('--opt-level', dest='opt_level', type=str, default='O1', choices=['O1', 'O2', 'O3'],
                         help='Which optimisation to use for mixed precision training.')
 
     # Not used currently. Might get implemented for parallelized data loading

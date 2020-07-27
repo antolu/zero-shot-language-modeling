@@ -40,6 +40,7 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
 
             data = data.squeeze(0).to(device)
             targets = targets.squeeze(0).to(device)
+            lang = lang.to(device)
 
             hidden = model.init_hidden(batchsize=data.size(-1))
 
@@ -75,7 +76,7 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
 
             loss /= n_samples
 
-            tr_loss += loss.item()
+            log_loss = loss
 
             if isinstance(prior, VIPrior):
                 kl_term = prior.kl_div()
@@ -99,10 +100,10 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
                 loss.backward()
 
             if tb_writer is not None:
-                tb_writer.add_scalar('train/loss', tr_loss - logging_loss, steps)
+                tb_writer.add_scalar('train/loss', log_loss.item(), steps)
 
                 if isinstance(prior, VIPrior):
-                    tb_writer.add_scalar('train/kl', tr_kl - logging_kl, steps)
+                    tb_writer.add_scalar('train/kl', kl_term.item(), steps)
                     tb_writer.add_scalar('train/loss+kl', loss.item(), steps)
 
                     logging_kl += tr_kl
@@ -152,6 +153,7 @@ def evaluate(dataloader: DataLoader, model: RNN, loss_function: Union[SplitCross
         for data, targets, seq_len, lang in pbar:
             data = data.squeeze(0).to(device)
             targets = targets.squeeze(0).to(device)
+            lang = lang.to(device)
 
             if only_l and only_l != lang:
                 continue
@@ -191,6 +193,7 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
         for data, targets, seq_len, lang in pbar:
             data = data.squeeze(0).to(device)
             targets = targets.squeeze(0).to(device)
+            lang = lang.to(device)
 
             lr2 = optimizer.param_groups[0]['lr']
             optimizer.param_groups[0]['lr'] = lr2 * seq_len.item() / bptt
