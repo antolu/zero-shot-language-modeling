@@ -101,7 +101,7 @@ def main():
     train_set, val_set, test_set = data_splits['train'], data_splits['valid'], data_splits['test']
     dictionary = data_splits['dictionary']
 
-    train_language_distr = get_sampling_probabilities(train_set, 0.6)
+    train_language_distr = get_sampling_probabilities(train_set, 1.0) 
     train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True,
                         language_probabilities=train_language_distr)
     val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True)
