@@ -24,12 +24,23 @@ def main():
     held_out = held_out - 1
     assert 0 <= held_out < 4
 
+    prior = input('Which prior to use (ninf/laplace/vi)? ')
+    assert prior in ['ninf', 'laplace', 'vi']
+
+    fp16 = input('Use fp16 (y/n)? ')
+    assert fp16 in ['y', 'n']
+
     train_langs = [lang for subset in splits for lang in subset if subset != splits[held_out]]
     print(f'Train lang size: {len(train_langs)}')
 
     dev_langs_idx = random.sample(range(len(train_langs)), 5)
 
-    output = "python main.py --train --refine --laplace --dropoute 0 --dropouti 0.1 --dropouth 0.1 --dropouto 0.4 --wdrop 0.2"
+    output = f'python main.py --train --refine --prior {prior}'
+
+    if fp16 == 'y':
+        output += ' --fp16'
+
+    output += ' --dropoute 0 --dropouti 0.1 --dropouth 0.1 --dropouto 0.4 --wdrop 0.2'
 
     output += ' \\\n\t --dev-langs'
     for i, idx in enumerate(dev_langs_idx):

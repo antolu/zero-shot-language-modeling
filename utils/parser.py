@@ -15,7 +15,9 @@ def get_args():
     parser.add_argument('--train', action='store_true', help='Train the model')
     parser.add_argument('--test', action='store_true', help='Test the model')
     parser.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
-    parser.add_argument('--laplace', action='store_true', help='Use laplacian regularisation')
+
+    parser.add_argument('--prior', choices=['ninf', 'laplace', 'vi', 'hmc'], default='ninf',
+                        help='Which technique to use for inference of the universal prior')
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument('--start-epoch', default=1, type=int, dest='start_epoch',
@@ -36,10 +38,15 @@ def get_args():
     parser.add_argument('--no-seed', action='store_true', dest='no_seed', help='Do not set a random seed.')
     parser.add_argument('--seed', type=int, default=1111, help='Random seed')
 
+    parser.add_argument("--n-samples", dest='n_samples', default=4, type=int,
+                        help="Number of samples in the Bayesian mode.")
+    parser.add_argument("--scaling", default='uniform', type=str, choices=['uniform', 'linear_annealing', 'logistic_annealing'],
+                        help="Scaling for KL term in VI.")
+
     # Arguments concerning the model
     parser.add_argument('--cond-type', type=str, dest='cond_type', default='None',
                         choices=['none', 'platanios', 'sutskever', 'oestling'],
-                        help='Which condition type to use for training the model.')
+                        help='Which condFrais de dossiers : compris dans la commissionition type to use for training the model.')
     parser.add_argument('--nhidden', type=int, default=1150, help='Number of hidden units in the LSTM.')
     parser.add_argument('--emsize', type=int, default=400, help='The size of the embeddings in the LSTM.')
     parser.add_argument('--nlayers', type=int, default=3, help='Number of layers in the LSTM')
@@ -65,7 +72,7 @@ def get_args():
     # Mixed precision settings
     parser.add_argument('--fp16', action='store_true',
                         help='Whether to use FP16 or FP32 in training.')
-    parser.add_argument('--opt-level', dest='opt_level', type=str, default='O1',
+    parser.add_argument('--opt-level', dest='opt_level', type=str, default='O1', choices=['O1', 'O2', 'O3'],
                         help='Which optimisation to use for mixed precision training.')
 
     # Not used currently. Might get implemented for parallelized data loading
