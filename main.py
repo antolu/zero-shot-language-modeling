@@ -10,36 +10,39 @@ from pprint import pformat
 import torch
 import tqdm
 from torch.optim import Adam
+from torch.nn.modules import CrossEntropyLoss
+from torch.utils.tensorboard import SummaryWriter
 
-from data import DataLoader
+from laplace import GaussianPrior, LaplacePrior, VIPrior
+from criterion import SplitCrossEntropyLoss
+from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
+from engine import train, evaluate, refine
+from models import RNN
+from utils.parser import get_args
+from utils import make_checkpoint, load_model
+from regularisation import WeightDrop
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
 LOG_DIR = 'logs'
-log = logging.getLogger('zerolm')
+writer_dir = path.join(LOG_DIR, f'zerolm_{timestamp}')
+tb_writer = SummaryWriter(writer_dir)
+
+log = logging.getLogger()
 log.setLevel(logging.DEBUG)
 
-fh = logging.FileHandler(path.join(LOG_DIR, f'zero_lm_{timestamp}.log'))
+fh = logging.FileHandler(path.join(writer_dir, 'log.log'))
 fh.setLevel(logging.DEBUG)
 
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
 
-formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(message)s', "%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
 fh.setFormatter(formatter)
 ch.setFormatter(formatter)
 
 log.addHandler(fh)
 log.addHandler(ch)
-
-from laplace import GaussianPrior, LaplacePrior
-from criterion import SplitCrossEntropyLoss
-from data import get_sampling_probabilities, Dataset, Corpus
-from engine import train, evaluate, refine
-from models import RNN
-from utils.parser import get_args
-from utils import make_checkpoint, save_model, load_model, DotDict
-from regularisation import WeightDrop
 
 
 def main():
@@ -60,7 +63,7 @@ def main():
         log.info('Using FP32')
         amp = None
 
-    log.info(f'Using time stamp {timestamp} to save models.')
+    log.info(f'Using time stamp {timestamp} to save models and logs.')
 
     if not args.no_seed:
         log.info(f'Setting random seed to {args.seed} for reproducibility.')
@@ -98,7 +101,7 @@ def main():
     train_set, val_set, test_set = data_splits['train'], data_splits['valid'], data_splits['test']
     dictionary = data_splits['dictionary']
 
-    train_language_distr = get_sampling_probabilities(train_set, 0.8)
+    train_language_distr = get_sampling_probabilities(train_set, 1.0) 
     train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True,
                         language_probabilities=train_language_distr)
     val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True)
@@ -111,8 +114,7 @@ def main():
     if args.refine:
         refine_set = dict()
         for lang, lang_d in data_splits['train_100'].items():
-            refine_set[lang] = Dataset({lang: lang_d}, batchsize=args.valid_batchsize, bptt=args.bptt,
-                                       reset_on_iter=True)
+            refine_set[lang] = Dataset({lang: lang_d}, batchsize=args.valid_batchsize, bptt=args.bptt, make_config=True)
 
     n_token = len(dictionary.idx2tkn)
 
@@ -129,24 +131,24 @@ def main():
                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
+    if args.opt_level != 'O2':
+        loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+    else:
+        loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     else:
-        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
-
-    loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
-    # loss_function = nn.CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(loss_function.parameters())
+        optimizer = Adam(params, lr=args.lr, weight_decay=args.wdecay)
 
     if use_apex:
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.opt_level)
 
-    params = list(model.parameters()) + list(loss_function.parameters())
-
-    parameters = DotDict({
+    parameters = {
         'model': model,
         'optimizer': optimizer,
         'loss_function': loss_function,
-        'parameters': params,
         'use_apex': use_apex,
         'amp': amp if use_apex else None,
         'clip': args.clip,
@@ -154,8 +156,10 @@ def main():
         'beta': args.beta,
         'bptt': args.bptt,
         'device': device,
-    })
+        'prior': args.prior,
+    }
 
+    # Add backward hook for gradient clipping
     if args.clip:
         if use_apex:
             for p in amp.master_params(optimizer):
@@ -163,6 +167,15 @@ def main():
         else:
             for p in model.parameters():
                 p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+
+    if args.prior == 'vi':
+        prior = VIPrior(model, device=device)
+        parameters['prior'] = prior
+
+        def sample_weights(module: torch.nn.Module, input: torch.Tensor):
+            prior.sample_weights(module)
+
+        sample_weights_hook = model.register_forward_pre_hook(sample_weights)
 
     # Load model checkpoint if available
     start_epoch = 1
@@ -185,12 +198,19 @@ def main():
 
     saved_models = list()
 
+    result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
+
     def test():
-        log.info('-' * 89)
-        log.info('Running test set...')
-        test_loss = evaluate(test_loader, **parameters)
+        log.info('=' * 89)
+        log.info('Running test set (zero-shot results)...')
+        test_loss, avg_loss = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
-        log.info('-' * 89)
+
+        for lang, avg_l_loss in avg_loss.items():
+            langstr = dictionary.idx2lang[lang]
+            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+
+        log.info('=' * 89)
 
     if args.train:
         f = 1.
@@ -204,19 +224,33 @@ def main():
         data_spec_avg = data_spec_count / len(train_set.data.items())
         data_spec_lrweights = dict([(l, data_spec_avg / len(ds)) for l, ds in train_set.data.items()])
 
+        # estimate total number of steps
+        total_steps = sum([len(ds) // args.bptt for l, ds in train_set.data.items()]) * args.no_epochs
+        steps = 0
+
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
-                train(train_loader, lr_weights=data_spec_lrweights, **parameters)
 
-                val_loss = evaluate(val_loader, **parameters)
+                steps = train(train_loader, lr_weights=data_spec_lrweights, **parameters,
+                              total_steps=total_steps, steps=steps,
+                              scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer)
+
+                val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
 
                 # Save model
-                filename = path.join(args.dir_model,
-                                     '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else ''))
-                save_model(filename, make_checkpoint(epoch + 1, **parameters))
+                if args.prior == 'vi':
+                    sample_weights_hook.remove()
+
+                filename = path.join(args.checkpoint_dir,
+                                     '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
+                                     args.prior))
+                torch.save(make_checkpoint(epoch + 1, **parameters), filename)
                 saved_models.append(filename)
+
+                if args.prior == 'vi':
+                    sample_weights_hook = model.register_forward_pre_hook(sample_weights)
 
                 # Early stopping
                 if val_loss < stored_loss:
@@ -243,9 +277,13 @@ def main():
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
-            save_model(path.join(args.checkpoint_dir,
-                                 '{}_epoch{}{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '')),
-                       make_checkpoint(epoch, **parameters))
+            if args.prior == 'vi':
+                sample_weights_hook.remove()
+
+            torch.save(make_checkpoint(epoch, **parameters),
+                       path.join(args.checkpoint_dir,
+                                 '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
+                                                              args.prior)))
             return
     elif args.test:
         test()
@@ -254,16 +292,40 @@ def main():
     if not args.target_langs:
         exit(0)
 
+    importance = 1e-5
+
     # If use UNIV, calculate informed prior, else use boring prior
-    if args.laplace:
-        log.info('Creating laplace approximation dataset')
-        laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
-        laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
-        prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp, device=device)
+    if args.prior == 'laplace':
+        if not isinstance(prior, LaplacePrior):  # only calculate matrix if it is not supplied.
+            log.info('Creating laplace approximation dataset')
+            laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
+            laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
+            log.info('Creating Laplacian prior')
+            prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
+                                               device=device)
+            parameters['prior'] = prior
+
+            torch.save(make_checkpoint('fisher_matrix', **parameters),
+                       path.join(args.checkpoint_dir,
+                                 '{}_fishers_matrix{}_{}.pth'.format(timestamp, '_with_apex' if use_apex else '',
+                                                              args.prior)))
+        importance = 1e5
+
+    elif args.prior == 'ninf':
+        log.info('Creating non-informative Gaussian prior')
+        parameters['prior'] = GaussianPrior()
+    elif args.prior == 'vi':
+        importance = 1e-5
+    elif args.prior == 'hmc':
+        raise NotImplementedError
     else:
-        prior = GaussianPrior()
+        raise ValueError(f'Passed prior {args.prior} is not an implemented inference technique.')
 
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
+
+    # Remove sampling hook from model
+    if args.prior == 'vi':
+        sample_weights_hook.remove()
 
     # Refine on 100 samples on each target
     if args.refine:
@@ -271,33 +333,49 @@ def main():
         optimizer.param_groups[0]['lr'] = args.lr
         loss = 0
 
+        results = dict()
+
+        # Create individual tests sets
+        test_sets = dict()
+        for lang, lang_d in data_splits['test'].items():
+            test_sets[lang] = DataLoader(
+                Dataset({lang: lang_d}, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True),
+                num_workers=args.workers)
+
         for lang, lang_data in tqdm.tqdm(refine_set.items()):
             final_loss = False
-            refine_data = {lang: lang_data}
-            refine_data = Dataset(refine_data, batchsize=args.valid_batchsize, bptt=args.bptt, device=device,
-                                  reset_on_iter=True)
-            refine_dataloader = DataLoader(refine_data, num_workers=args.workers)
+            refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
             load_model(best_model, **parameters)
 
             log.info(f'Refining for language {dictionary.idx2lang[lang]}')
             for epoch in range(1, args.refine_epochs + 1):
-                refine(refine_dataloader, prior=prior, **parameters, importance=10000 if args.laplace else 1e-5)
+                refine(refine_dataloader, **parameters, importance=importance)
                 if epoch % 5 == 0:
                     final_loss = True
-                    loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+                    loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
+                                              device=device)
 
-                    langstr = dictionary.idx2lang[lang.item()]
-                    log.debug('| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                        langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
-                    )
+                    for lang, avg_l_loss in avg_loss.items():
+                        langstr = dictionary.idx2lang[lang]
+                        log.debug(
+                            result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
 
             if not final_loss:
-                loss, avg_loss = evaluate(test_loader, model, loss_function, only_l=lang, report_all=True)
+                loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
+                                          device=device)
 
-            langstr = dictionary.idx2lang[lang.item()]
-            log.debug('Final loss: | Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                langstr, avg_loss, math.exp(avg_loss), avg_loss / math.log(2))
-            )
+            for lang, avg_l_loss in avg_loss.items():
+                langstr = dictionary.idx2lang[lang]
+                log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                results[lang] = avg_l_loss
+
+        log.info('=' * 89)
+        log.info('FINAL FEW SHOT RESULTS: ')
+        log.info('=' * 89)
+        for lang, avg_l_loss in results.items():
+            langstr = dictionary.idx2lang[lang]
+            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+        log.info('=' * 89)
 
 
 if __name__ == "__main__":

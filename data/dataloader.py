@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader as _DataLoader
 
 from .dataset import Dataset
 
-log = logging.getLogger('zerolm')
+log = logging.getLogger(__name__)
 
 
 class DataLoader(_DataLoader):

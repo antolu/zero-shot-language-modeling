@@ -1,7 +1,7 @@
 import torch
 
 
-class _Prior:
+class Prior:
     """
     Abstract class to represent any prior to be used with MAP training.
     """

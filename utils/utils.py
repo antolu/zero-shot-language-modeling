@@ -3,47 +3,11 @@ from time import sleep
 from typing import Union
 
 import torch
+from torch import nn
 from torch.nn import CrossEntropyLoss, LSTM
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
-
-
-class DotDict(dict):
-    """
-    Example:
-    m = Map({'first_name': 'Eduardo'}, last_name='Pool', age=24, sports=['Soccer'])
-    """
-
-    def __init__(self, *args, **kwargs):
-        super(DotDict, self).__init__(*args, **kwargs)
-        for arg in args:
-            if isinstance(arg, dict):
-                for k, v in arg.items():
-                    if isinstance(v, dict):
-                        v = DotDict(v)
-                    self[k] = v
-
-        if kwargs:
-            for k, v in kwargs.items():
-                self[k] = v
-
-    def __getattr__(self, attr):
-        return self.get(attr)
-
-    def __setattr__(self, key, value):
-        self.__setitem__(key, value)
-
-    def __setitem__(self, key, value):
-        super(DotDict, self).__setitem__(key, value)
-        self.__dict__.update({key: value})
-
-    def __delattr__(self, item):
-        self.__delitem__(item)
-
-    def __delitem__(self, key):
-        super(DotDict, self).__delitem__(key)
-        del self.__dict__[key]
 
 
 def multithread(function, args: list, max_active_processes: int = cpu_count() - 1) -> list:
@@ -115,7 +79,7 @@ def multithread(function, args: list, max_active_processes: int = cpu_count() - 
 
 
 def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                    optimizer: torch.optim.Optimizer, use_apex=False, amp=None, **kwargs):
+                    optimizer: torch.optim.Optimizer, use_apex=False, amp=None, prior: Union[str, nn.Module] = None, **kwargs):
     """
     Packages network parameters into a picklable dictionary containing keys
     * epoch: current epoch
@@ -158,6 +122,9 @@ def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntr
     if use_apex:
         checkpoint['amp'] = amp.state_dict()
 
+    if prior is not None and not isinstance(prior, str):
+        checkpoint['prior'] = prior
+
     return checkpoint
 
 
@@ -178,7 +145,7 @@ def save_model(filepath: str, data):
 
 
 def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
-               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, **kwargs):
+               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, prior: Union[str, nn.Module] = None, **kwargs):
     """
     Load a checkpointed model into memory by reference
 
@@ -212,6 +179,9 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
         if 'amp' not in checkpoint:
             raise ValueError('Key amp not in checkpoint. Cannot load apex.')
         amp.load_state_dict(checkpoint['amp'])
+
+    if prior is not None and isinstance(prior, nn.Module):
+        prior.load_state_dict(checkpoint['prior'])
 
     return checkpoint
 

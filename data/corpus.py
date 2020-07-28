@@ -15,7 +15,7 @@ from tqdm import tqdm
 from data.dictionary import Dictionary
 from utils.utils import multithread
 
-log = logging.getLogger('zerolm')
+log = logging.getLogger(__name__)
 
 
 class Corpus:
@@ -134,6 +134,7 @@ class Corpus:
                 split['languages'] = included_langs
                 split['ignore_missing'] = True
 
+        # make sure that all the languages exist before attempting to load
         for split in splits:
             for language in split['languages']:
                 if language not in self.data:
@@ -144,10 +145,11 @@ class Corpus:
                     else:
                         raise ValueError(f'Language {language} does not exist in memory.')
 
+        # make sure all splits for each requested language exists before attempting to load
         for split in splits:
             for language in split['languages']:
                 if split['split'] not in self.data[language]:
-                    if ignore_missing:
+                    if ignore_missing or ('ignore_missing' in split and split['ignore_missing']):
                         log.warning(
                             f'Split {split["split"]} does not exist for language {language}. Skipping language.')
                         split['languages'].remove(language)
@@ -159,8 +161,9 @@ class Corpus:
         for split in splits:
             datastring += split['split'] + ' '.join(split['languages'])
         datastring = 'corpus.{}.data'.format(hashlib.md5(datastring.encode()).hexdigest())
+        save_data_path = path.join(self.datadir, datastring)
 
-        if path.exists(path.join(self.datadir, datastring)) and not force_rebuild:
+        if path.exists(save_data_path) and not force_rebuild:
             log.info('Loading cached dataset...')
             return torch.load(path.join(self.datadir, datastring))
         else:
@@ -184,12 +187,8 @@ class Corpus:
             return output
 
         # Prep to load dataset into memory
-        to_process = list()
-        for split in splits:
-            for language in split['languages']:
-                to_process.append([self.data[language][split['split']]])
-
-        tokenized_data = multithread(read_and_tokenize, [[self.data[language[split['split']]]] for split in splits for language in split['languages']])
+        log.info('Loading data into memory and tokenizing...')
+        tokenized_data = multithread(read_and_tokenize, [[self.data[language][split['split']]] for split in splits for language in split['languages']])
 
         # Index all tokens
         tokens = set()
@@ -208,6 +207,7 @@ class Corpus:
 
             return output
 
+        log.info('Constructing data tensors from token index...')
         built_tensors = multithread(build_tensors, [[data] for data in tokenized_data])
 
         # Build output dictionary
@@ -219,7 +219,8 @@ class Corpus:
         output['dictionary'] = self.dictionary
 
         # save dataset using the unique ID
-        with open(path.join(self.datadir, datastring), 'wb') as f:
+        log.info(f'Saving data tensors and dictionary to {save_data_path}')
+        with open(save_data_path, 'wb') as f:
             torch.save(output, f)
 
         return output
