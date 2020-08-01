@@ -52,7 +52,10 @@ def main():
     assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    log.info('Using device {}.'.format(device))
+    if torch.cuda.is_available():
+        log.info(f'Using device {torch.cuda.get_device_name()}')
+    else:
+        log.info('Using device cpu')
 
     use_apex = False
     if torch.cuda.is_available() and args.fp16:
@@ -98,6 +101,11 @@ def main():
         )
 
     data_splits = data.make_datasets(data_splits, force_rebuild=args.rebuild)
+
+    if args.only_build_data:
+        log.info('Finished building data tensors. Exiting')
+        return
+
     train_set, val_set, test_set = data_splits['train'], data_splits['valid'], data_splits['test']
     dictionary = data_splits['dictionary']
 
@@ -238,6 +246,7 @@ def main():
 
                 val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
+                log.info('End of epoch {} | Validation loss {}'.format(epoch, val_loss))
 
                 # Save model
                 if args.prior == 'vi':
@@ -261,6 +270,7 @@ def main():
 
                 if epochs_no_improve == args.patience:
                     log.info('Early stopping at epoch {}'.format(epoch))
+                    log.info('Stored loss {} < new loss {}'.format(stored_loss, val_loss))
                     break
 
                 val_losses.append(val_loss)
@@ -379,4 +389,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        log.exception('Got exception from main process')
+

@@ -10,6 +10,8 @@ def get_args():
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', dest='checkpoint_dir', help='The directory to save training checkpoints to')
     parser.add_argument('--checkpoint', type=str, default=None, help='path to pretrained-model')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
+    parser.add_argument('--only-build-data', action='store_true', \
+            dest='only_build_data', help='Only build data tensors, then exit the program')
 
     # Arguments concerning training and testing the model
     parser.add_argument('--train', action='store_true', help='Train the model')
@@ -47,7 +49,7 @@ def get_args():
     parser.add_argument('--cond-type', type=str, dest='cond_type', default='None',
                         choices=['none', 'platanios', 'sutskever', 'oestling'],
                         help='Which condFrais de dossiers : compris dans la commissionition type to use for training the model.')
-    parser.add_argument('--nhidden', type=int, default=1150, help='Number of hidden units in the LSTM.')
+    parser.add_argument('--nhidden', type=int, default=1840, help='Number of hidden units in the LSTM.')
     parser.add_argument('--emsize', type=int, default=400, help='The size of the embeddings in the LSTM.')
     parser.add_argument('--nlayers', type=int, default=3, help='Number of layers in the LSTM')
 
