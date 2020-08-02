@@ -345,8 +345,8 @@ def main():
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
 
     # Remove sampling hook from model
-    if args.prior == 'vi':
-        sample_weights_hook.remove()
+#    if args.prior == 'vi':
+#        sample_weights_hook.remove()
 
     # Refine on 100 samples on each target
     if args.refine:
