@@ -6,6 +6,7 @@ import random
 from datetime import datetime
 from os import path
 from pprint import pformat
+import numpy as np
 
 import torch
 import tqdm
@@ -71,7 +72,11 @@ def main():
     if not args.no_seed:
         log.info(f'Setting random seed to {args.seed} for reproducibility.')
         torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
         random.seed(args.seed)
+
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(args.seed)
 
     data = Corpus(args.datadir)
 
