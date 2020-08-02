@@ -78,7 +78,7 @@ class RNN(nn.Module):
                                    n_hidden if lay != n_layers - 1 else (n_input if tie_weights else n_hidden), 1,
                                    dropout=0) for lay in range(n_layers)]
 
-        if wdrop_layers and wdrop:
+        if wdrop_layers:
             for l, lstm in enumerate(self.rnns):
                 if l in wdrop_layers:
                     self.rnns[l] = WeightDrop(lstm, wdrop, ['weight_hh_l0'])

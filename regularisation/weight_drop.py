@@ -29,14 +29,15 @@ class WeightDrop(Module):
             self.module.register_parameter(f'{name_param}_raw', Parameter(w.data))
 
     def forward(self, *args):  # the function formerly known as "forward_new"
-        for name_param in self.weights_names_ls:
-            param = getattr(self.module, f'{name_param}_raw')
-            param_with_dropout = F.dropout(param, p=self.dropout, training=self.training)
-            param_with_dropout = torch.nn.Parameter(param_with_dropout)
-            setattr(self.module, name_param, param_with_dropout)
+        if self.dropout != 0.0:
+            for name_param in self.weights_names_ls:
+                param = getattr(self.module, f'{name_param}_raw')
+                param_with_dropout = F.dropout(param, p=self.dropout, training=self.training)
+                param_with_dropout = torch.nn.Parameter(param_with_dropout)
+                setattr(self.module, name_param, param_with_dropout)
 
-        if isinstance(self.module, torch.nn.RNNBase):
-            self.module.flatten_parameters()
+            if isinstance(self.module, torch.nn.RNNBase):
+                self.module.flatten_parameters()
 
         return self.module.forward(*args)
 

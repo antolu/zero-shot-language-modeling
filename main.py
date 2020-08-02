@@ -134,10 +134,16 @@ def main():
     # prior_matrix = pca.fit_transform(prior_matrix)
     prior = None
 
-    model = RNN(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
-                dropout=args.dropouto,
-                dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
-                wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
+    if args.prior != 'vi':
+        model = RNN(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
+                    dropout=args.dropouto,
+                    dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
+                    wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
+    else:
+        model = RNN(args.cond_type, prior, n_token, n_input=args.emsize, n_hidden=args.nhidden, n_layers=args.nlayers,
+                    dropout=0,
+                    dropoute=0, dropouth=0, dropouti=0, wdrop=0,
+                    wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
     if args.opt_level != 'O2' or not use_apex:  # Splitcross is not compatible with O2 optimization for amp
         loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
@@ -362,6 +368,16 @@ def main():
                 final_loss = False
                 refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
                 load_model(best_model, **parameters)
+
+                # reinstate dropout
+                model.edrop.dropout = args.dropoute
+                model.idrop.dropout = args.dropouti
+                model.hdrop.dropout = args.dropouth
+                model.odrop.dropout = args.dropout
+                model.embedding_dropout.dropout = args.dropoute
+                for rnn in model.rnns:
+                    if isinstance(rnn, WeightDrop):
+                        rnn.dropout = args.wdrop
 
                 log.info(f'Refining for language {dictionary.idx2lang[lang]}')
                 for epoch in range(1, args.refine_epochs + 1):
