@@ -109,7 +109,7 @@ def main():
     train_set, val_set, test_set = data_splits['train'], data_splits['valid'], data_splits['test']
     dictionary = data_splits['dictionary']
 
-    train_language_distr = get_sampling_probabilities(train_set, 1.0) 
+    train_language_distr = get_sampling_probabilities(train_set, args.lang_sampling_probs)
     train_set = Dataset(train_set, batchsize=args.batchsize, bptt=args.bptt, reset_on_iter=True,
                         language_probabilities=train_language_distr)
     val_set = Dataset(val_set, make_config=True, batchsize=args.valid_batchsize, bptt=args.bptt, eval=True)
@@ -139,7 +139,7 @@ def main():
                 dropoute=args.dropoute, dropouth=args.dropouth, dropouti=args.dropouti, wdrop=args.wdrop,
                 wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
-    if args.opt_level != 'O2':
+    if args.opt_level != 'O2' or not use_apex:  # Splitcross is not compatible with O2 optimization for amp
         loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
     else:
         loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
@@ -214,9 +214,14 @@ def main():
         test_loss, avg_loss = evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
 
+        tb_str = ''
         for lang, avg_l_loss in avg_loss.items():
             langstr = dictionary.idx2lang[lang]
-            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+            result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+            log.info(result)
+            tb_str += result + '\n'
+
+            tb_writer.add_text('zero-shot results', tb_str)
 
         log.info('=' * 89)
 
@@ -352,40 +357,49 @@ def main():
                 Dataset({lang: lang_d}, make_config=True, batchsize=args.test_batchsize, bptt=args.bptt, eval=True),
                 num_workers=args.workers)
 
-        for lang, lang_data in tqdm.tqdm(refine_set.items()):
-            final_loss = False
-            refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
-            load_model(best_model, **parameters)
+        try:  # fail-safe in case cluster kills job
+            for lang, lang_data in tqdm.tqdm(refine_set.items()):
+                final_loss = False
+                refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
+                load_model(best_model, **parameters)
 
-            log.info(f'Refining for language {dictionary.idx2lang[lang]}')
-            for epoch in range(1, args.refine_epochs + 1):
-                refine(refine_dataloader, **parameters, importance=importance)
-                if epoch % 5 == 0:
-                    final_loss = True
+                log.info(f'Refining for language {dictionary.idx2lang[lang]}')
+                for epoch in range(1, args.refine_epochs + 1):
+                    refine(refine_dataloader, **parameters, importance=importance)
+                    if epoch % 5 == 0:
+                        final_loss = True
+                        loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
+                                                  device=device)
+
+                        for lang, avg_l_loss in avg_loss.items():
+                            langstr = dictionary.idx2lang[lang]
+                            log.debug(
+                                result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+
+                if not final_loss:
                     loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
                                               device=device)
 
-                    for lang, avg_l_loss in avg_loss.items():
-                        langstr = dictionary.idx2lang[lang]
-                        log.debug(
-                            result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                for lang, avg_l_loss in avg_loss.items():
+                    langstr = dictionary.idx2lang[lang]
+                    log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
+                    results[lang] = avg_l_loss
 
-            if not final_loss:
-                loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
-                                          device=device)
-
-            for lang, avg_l_loss in avg_loss.items():
+        except KeyboardInterrupt:
+            log.error('Refine process stopped. Printing available results.')
+        finally:
+            log.info('=' * 89)
+            log.info('FINAL FEW SHOT RESULTS: ')
+            log.info('=' * 89)
+            tb_str = ''
+            for lang, avg_l_loss in results.items():
                 langstr = dictionary.idx2lang[lang]
-                log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
-                results[lang] = avg_l_loss
+                result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+                log.info(result)
+                tb_str += result + '\n'
+            log.info('=' * 89)
 
-        log.info('=' * 89)
-        log.info('FINAL FEW SHOT RESULTS: ')
-        log.info('=' * 89)
-        for lang, avg_l_loss in results.items():
-            langstr = dictionary.idx2lang[lang]
-            log.info(result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
-        log.info('=' * 89)
+            tb_writer.add_text('few-shot results', tb_str)
 
 
 if __name__ == "__main__":

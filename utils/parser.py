@@ -20,6 +20,9 @@ def get_args():
 
     parser.add_argument('--prior', choices=['ninf', 'laplace', 'vi', 'hmc'], default='ninf',
                         help='Which technique to use for inference of the universal prior')
+    parser.add_argument('--lang-sampling-probs', dest='lang_sampling_probs', type=float, default=1.0,
+                        help='Take the probability of sampling each language to the power of this value. A value smaller'
+                             'than 1 will increase the relative probability of less available languages.'
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument('--start-epoch', default=1, type=int, dest='start_epoch',
