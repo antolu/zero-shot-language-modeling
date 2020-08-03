@@ -144,8 +144,9 @@ def save_model(filepath: str, data):
         torch.save(data, f)
 
 
-def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
-               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None, prior: Union[str, nn.Module] = None, **kwargs):
+def load_model(filepath: str, parameters: dict, model: LSTM, optimizer: torch.optim.Optimizer,
+               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None,
+               prior: Union[str, nn.Module] = None, **kwargs):
     """
     Load a checkpointed model into memory by reference
 
@@ -180,8 +181,8 @@ def load_model(filepath: str, model: LSTM, optimizer: torch.optim.Optimizer,
             raise ValueError('Key amp not in checkpoint. Cannot load apex.')
         amp.load_state_dict(checkpoint['amp'])
 
-    if prior is not None and isinstance(prior, nn.Module):
-        prior.load_state_dict(checkpoint['prior'])
+    if 'prior' in parameters and 'prior' in checkpoint:
+        parameters['prior'] = checkpoint['prior']
 
     return checkpoint
 

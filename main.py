@@ -204,7 +204,7 @@ def main():
             checkpoint = None
         else:
             log.info('Loading the checkpoint at {}'.format(args.checkpoint))
-            checkpoint = load_model(args.checkpoint, **parameters)
+            checkpoint = load_model(args.checkpoint, parameters, **parameters)
 
             start_epoch = checkpoint['epoch']
 
@@ -373,7 +373,7 @@ def main():
             for lang, lang_data in tqdm.tqdm(refine_set.items()):
                 final_loss = False
                 refine_dataloader = DataLoader(lang_data, num_workers=args.workers)
-                load_model(best_model, **parameters)
+                load_model(best_model, parameters, **parameters)
 
                 # reinstate dropout
                 model.edrop.dropout = args.dropoute
