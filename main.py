@@ -233,6 +233,7 @@ def main():
             tb_str += result + '\n'
 
             tb_writer.add_text('zero-shot results', tb_str)
+            tb_writer.flush()
 
         log.info('=' * 89)
 
@@ -378,7 +379,7 @@ def main():
                 model.edrop.dropout = args.dropoute
                 model.idrop.dropout = args.dropouti
                 model.hdrop.dropout = args.dropouth
-                model.odrop.dropout = args.dropout
+                model.odrop.dropout = args.dropouto
                 model.embedding_dropout.dropout = args.dropoute
                 for rnn in model.rnns:
                     if isinstance(rnn, WeightDrop):
@@ -387,7 +388,7 @@ def main():
                 log.info(f'Refining for language {dictionary.idx2lang[lang]}')
                 for epoch in range(1, args.refine_epochs + 1):
                     refine(refine_dataloader, **parameters, importance=importance)
-                    if epoch % 5 == 0:
+                    if epoch % 5 == 0 and not args.fast:
                         final_loss = True
                         loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
                                                   device=device)
@@ -421,6 +422,7 @@ def main():
             log.info('=' * 89)
 
             tb_writer.add_text('few-shot results', tb_str)
+            tb_writer.flush()
 
 
 if __name__ == "__main__":
