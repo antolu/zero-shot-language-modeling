@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
@@ -66,3 +67,7 @@ class VIPrior(Prior):
                 _loss = self._log_variance[n] + (p - self._means[n])**2 * self._log_variance[n].exp()
                 loss += _loss.sum()
         return loss
+
+    def write_nts(self, tb_writer: SummaryWriter):
+        for n in self.params:
+            tb_writer.add_scalar(f'nts_{n}', torch.abs(self._means[n]) / torch.sqrt(self._log_variance[n].exp()))

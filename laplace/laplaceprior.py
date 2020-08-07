@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
@@ -36,6 +37,9 @@ class LaplacePrior(Prior):
                 _loss = self._precision_matrices[n] * (p - self._means[n]) ** 2
                 loss += _loss.sum()
         return loss
+
+    def write_nts(self, tbwriter: SummaryWriter):
+        pass
 
 
 def _diag_fisher(model: nn.Module, loss_function: torch.nn.modules.loss._Loss,
@@ -91,3 +95,4 @@ def _diag_fisher(model: nn.Module, loss_function: torch.nn.modules.loss._Loss,
     log.info("Finished calculation of Fisher's matrix, it took {} minutes".format(
         (time.time() - start_time) / (1000 / 60)))
     return precision_matrices
+
