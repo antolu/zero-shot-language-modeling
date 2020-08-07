@@ -42,10 +42,10 @@ class VIPrior(Prior):
         self._means = {n: nn.Parameter(torch.zeros_like(p)) for n, p in model.named_parameters() if p.requires_grad}
         self._log_variance = {n: nn.Parameter(torch.ones_like(p)) for n, p in model.named_parameters() if p.requires_grad}
 
-        for _, p in self._means:
-            nn.init.xavier_normal_(p)
-        for _, p in self._log_variance:
-            nn.init.uniform_(p, -5, -1)
+        for _, p in self._means.items():
+            nn.init.uniform_(p, -1, 1)
+        for _, p in self._log_variance.items():
+            nn.init.uniform_(p, -5, -3)
 
     def kl_div(self) -> torch.Tensor:
         kl = 0

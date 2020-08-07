@@ -6,3 +6,7 @@ lstm
 awd-lstm
 parameter-factorization
 src
+lsf*
+logs
+experiments/*.sh
+

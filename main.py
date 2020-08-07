@@ -178,15 +178,6 @@ def main():
         'prior': args.prior,
     }
 
-    # Add backward hook for gradient clipping
-    if args.clip:
-        if use_apex:
-            for p in amp.master_params(optimizer):
-                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
-        else:
-            for p in model.parameters():
-                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
-
     if args.prior == 'vi':
         prior = VIPrior(model, device=device)
         parameters['prior'] = prior
@@ -215,6 +206,15 @@ def main():
                 elif rnn.zoneout > 0:
                     rnn.zoneout = args.wdrop
 
+    # Add backward hook for gradient clipping
+    if args.clip:
+        if use_apex:
+            for p in amp.master_params(optimizer):
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+        else:
+            for p in model.parameters():
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+
     saved_models = list()
 
     result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
@@ -230,7 +230,7 @@ def main():
             langstr = dictionary.idx2lang[lang]
             result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
             log.info(result)
-            tb_str += result + '\n'
+            tb_str += result + ' \n'
 
             tb_writer.add_text('zero-shot results', tb_str)
             tb_writer.flush()
@@ -348,6 +348,10 @@ def main():
     else:
         raise ValueError(f'Passed prior {args.prior} is not an implemented inference technique.')
 
+    if args.importance != -1.0:
+        log.info(f'Overriding importance {importance} with {args.importance}')
+        importance = args.importance
+
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
 
     # Remove sampling hook from model
@@ -418,7 +422,7 @@ def main():
                 langstr = dictionary.idx2lang[lang]
                 result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
                 log.info(result)
-                tb_str += result + '\n'
+                tb_str += result + ' \n'
             log.info('=' * 89)
 
             tb_writer.add_text('few-shot results', tb_str)

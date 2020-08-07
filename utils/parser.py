@@ -24,6 +24,7 @@ def get_args():
                         help='Take the probability of sampling each language to the power of this value. A value smaller'
                              'than 1 will increase the relative probability of less available languages.')
     parser.add_argument('--fast', action='store_true', help='Skip some evaluation steps to speed up refine.')
+    parser.add_argument('--importance', type=float, default='-1.', help='Weight factor for regularisation term during refine. Setting to -1 makes the program use default values in the code.')
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument('--start-epoch', default=1, type=int, dest='start_epoch',
