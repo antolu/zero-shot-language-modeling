@@ -38,7 +38,7 @@ class LaplacePrior(Prior):
                 loss += _loss.sum()
         return loss
 
-    def write_nts(self, tbwriter: SummaryWriter):
+    def write_nts(self, tbwriter: SummaryWriter, steps: int):
         pass
 
 

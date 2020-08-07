@@ -68,6 +68,7 @@ class VIPrior(Prior):
                 loss += _loss.sum()
         return loss
 
-    def write_nts(self, tb_writer: SummaryWriter):
+    def write_nts(self, tb_writer: SummaryWriter, step: int = 0):
         for n in self.params:
-            tb_writer.add_scalar(f'nts_{n}', torch.abs(self._means[n]) / torch.sqrt(self._log_variance[n].exp()))
+            tb_writer.add_scalar(f'nts/{n}', 
+                    (torch.abs(self._means[n]) / torch.sqrt(self._log_variance[n].exp())).sum(), step)

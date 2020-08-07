@@ -230,7 +230,7 @@ def main():
             langstr = dictionary.idx2lang[lang]
             result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
             log.info(result)
-            tb_str += result + ' \n'
+            tb_str += result + '  \n'
 
             tb_writer.add_text('zero-shot results', tb_str)
             tb_writer.flush()
@@ -422,7 +422,7 @@ def main():
                 langstr = dictionary.idx2lang[lang]
                 result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
                 log.info(result)
-                tb_str += result + ' \n'
+                tb_str += result + '  \n'
             log.info('=' * 89)
 
             tb_writer.add_text('few-shot results', tb_str)
