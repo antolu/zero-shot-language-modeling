@@ -7,6 +7,7 @@ from datetime import datetime
 from os import path
 from pprint import pformat
 import numpy as np
+from bdb import BdbQuit
 
 import torch
 import tqdm
@@ -252,6 +253,7 @@ def main():
         # estimate total number of steps
         total_steps = sum([len(ds) // args.bptt for l, ds in train_set.data.items()]) * args.no_epochs
         steps = 0
+        stop = False
 
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
@@ -259,7 +261,8 @@ def main():
 
                 steps = train(train_loader, lr_weights=data_spec_lrweights, **parameters,
                               total_steps=total_steps, steps=steps,
-                              scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer)
+                              scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer,
+                              debug=args.debug)
 
                 val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
@@ -300,18 +303,25 @@ def main():
 
                     f += 1.
             test()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, BdbQuit):
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
 
             if args.prior == 'vi':
                 sample_weights_hook.remove()
 
+            stop = True
+        finally:
             torch.save(make_checkpoint(epoch, **parameters),
                        path.join(args.checkpoint_dir,
                                  '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
                                                               args.prior)))
-            return
+
+            if isinstance(prior, VIPrior) and args.debug:
+                prior.dump_nts(LOG_DIR)
+
+            if stop:
+                return
     elif args.test:
         test()
 

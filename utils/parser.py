@@ -7,11 +7,12 @@ def get_args():
     # Arguments concerning the environment of the repository
     parser.add_argument('--datadir', type=str, default='dataset/bibles_latin',
                         help='Path to the root directory containing the datasets.')
-    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', dest='checkpoint_dir', help='The directory to save training checkpoints to')
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', dest='checkpoint_dir',
+                        help='The directory to save training checkpoints to')
     parser.add_argument('--checkpoint', type=str, default=None, help='path to pretrained-model')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
-    parser.add_argument('--only-build-data', action='store_true', \
-            dest='only_build_data', help='Only build data tensors, then exit the program')
+    parser.add_argument('--only-build-data', action='store_true',
+                        dest='only_build_data', help='Only build data tensors, then exit the program')
 
     # Arguments concerning training and testing the model
     parser.add_argument('--train', action='store_true', help='Train the model')
@@ -24,14 +25,16 @@ def get_args():
                         help='Take the probability of sampling each language to the power of this value. A value smaller'
                              'than 1 will increase the relative probability of less available languages.')
     parser.add_argument('--fast', action='store_true', help='Skip some evaluation steps to speed up refine.')
-    parser.add_argument('--importance', type=float, default='-1.', help='Weight factor for regularisation term during refine. Setting to -1 makes the program use default values in the code.')
+    parser.add_argument('--importance', type=float, default='-1.',
+                        help='Weight factor for regularisation term during refine. Setting to -1 makes the program use default values in the code.')
 
     parser.add_argument('--resume', action='store_true', help='Resume training')
     parser.add_argument('--start-epoch', default=1, type=int, dest='start_epoch',
                         help='The epoch to start/resume training at')
     parser.add_argument('--no-epochs', type=int, default=6, dest='no_epochs',
                         help='Number of epochs to train the model')
-    parser.add_argument('--refine-epochs', type=int, default=25, dest='refine_epochs', help='Number of epochs to refine model with fisher matrix')
+    parser.add_argument('--refine-epochs', type=int, default=25, dest='refine_epochs',
+                        help='Number of epochs to refine model with fisher matrix')
     parser.add_argument('-lr', '--lr', type=float, default=1.e-4, help='The learning rate for the Adam optimiser.')
     parser.add_argument('--wdecay', type=float, default=1.2e-6, help='Weight decay applied to all weights')
     parser.add_argument('--when', nargs="+", type=int, default=[-1],
@@ -47,13 +50,14 @@ def get_args():
 
     parser.add_argument("--n-samples", dest='n_samples', default=4, type=int,
                         help="Number of samples in the Bayesian mode.")
-    parser.add_argument("--scaling", default='uniform', type=str, choices=['uniform', 'linear_annealing', 'logistic_annealing'],
+    parser.add_argument("--scaling", default='uniform', type=str,
+                        choices=['uniform', 'linear_annealing', 'logistic_annealing'],
                         help="Scaling for KL term in VI.")
 
     # Arguments concerning the model
     parser.add_argument('--cond-type', type=str, dest='cond_type', default='None',
                         choices=['none', 'platanios', 'sutskever', 'oestling'],
-                        help='Which condFrais de dossiers : compris dans la commissionition type to use for training the model.')
+                        help='Which condition type to use for training the model.')
     parser.add_argument('--nhidden', type=int, default=1840, help='Number of hidden units in the LSTM.')
     parser.add_argument('--emsize', type=int, default=400, help='The size of the embeddings in the LSTM.')
     parser.add_argument('--nlayers', type=int, default=3, help='Number of layers in the LSTM')
@@ -92,6 +96,8 @@ def get_args():
     parser.add_argument('--eps', type=float, default=1e-4,
                         help='The difference between losses between iterations \
                             to break.')
+
+    parser.add_argument('--debug', action='store_true', help='Enable additional debug output')
 
     args = parser.parse_args()
 

@@ -8,6 +8,3 @@ class Prior:
     """
     def penalty(self, *args) -> torch.Tensor:
         raise NotImplementedError
-
-    def write_nts(self, tbwriter: SummaryWriter, step: int):
-        raise NotImplementedError

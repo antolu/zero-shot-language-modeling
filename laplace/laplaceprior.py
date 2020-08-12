@@ -38,10 +38,6 @@ class LaplacePrior(Prior):
                 loss += _loss.sum()
         return loss
 
-    def write_nts(self, tbwriter: SummaryWriter, steps: int):
-        pass
-
-
 def _diag_fisher(model: nn.Module, loss_function: torch.nn.modules.loss._Loss,
                  dataloader: DataLoader, optimizer: torch.optim.Optimizer, amp=None, device: Union[torch.device, str] = 'cpu'):
     precision_matrices = {}

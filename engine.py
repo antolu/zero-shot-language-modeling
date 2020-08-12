@@ -106,7 +106,8 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
                     tb_writer.add_scalar('train/kl', kl_term.item(), steps)
                     tb_writer.add_scalar('train/loss+kl', loss.item(), steps)
 
-                    prior.write_nts(tb_writer, steps)
+                    if 'debug' in kwargs and kwargs['debug']:
+                        prior.calculate_nts()
 
                     logging_kl += tr_kl
 

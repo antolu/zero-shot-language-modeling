@@ -3,6 +3,7 @@ import math
 import time
 from copy import deepcopy
 from typing import Union
+from os import path
 
 import torch
 from torch import nn
@@ -10,12 +11,16 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import numpy as np
 
 from criterion import SplitCrossEntropyLoss
 from laplace import Prior
 from regularisation import LockedDropout, WeightDrop
 
 log = logging.getLogger(__name__)
+
+
+DEBUG = True
 
 
 def softrelu(x: torch.Tensor):
@@ -47,6 +52,9 @@ class VIPrior(Prior):
         for _, p in self._log_variance.items():
             nn.init.uniform_(p, -5, -3)
 
+        if DEBUG:
+            self.nts = {n: list() for n in self.params}
+
     def kl_div(self) -> torch.Tensor:
         kl = 0
 
@@ -68,7 +76,25 @@ class VIPrior(Prior):
                 loss += _loss.sum()
         return loss
 
-    def write_nts(self, tb_writer: SummaryWriter, step: int = 0):
+    def calculate_nts(self):
+        if not DEBUG:
+            raise RuntimeError('DEBUG flag is not set to true. Cannot calculate NtS')
+
         for n in self.params:
-            tb_writer.add_scalar(f'nts/{n}', 
-                    (torch.abs(self._means[n]) / torch.sqrt(self._log_variance[n].exp())).sum(), step)
+            self.nts[n].append((torch.abs(self._means[n]) / (self._log_variance[n] / 2)).exp().clone().detach().cpu())
+
+    def dump_nts(self, dump_dir: str):
+        if not DEBUG:
+            raise RuntimeError('DEBUG flag is not set to true. Cannot calculate NtS')
+
+        for n in self.params:
+            if len(self.nts[n]) == 0:
+                continue
+
+            arr = np.zeros(len(self.nts[n]) * self.nts[n][0].numel())
+
+            for row, step in enumerate(self.nts[n]):
+                arr[row, :] = step.flatten().numpy()
+
+            with open(path.join(dump_dir, f'nts_{n}.npy'), 'wb') as f:
+                np.save(f, arr)
