@@ -255,6 +255,14 @@ def main():
         steps = 0
         stop = False
 
+        if args.debug:
+            debug_streams = dict()
+
+            for n, p in model.named_parameters():
+                debug_streams[n] = open(path.join(LOG_DIR, f'nts_{n}.csv'), 'w')
+        else:
+            debug_streams = None
+
         try:
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
@@ -262,7 +270,7 @@ def main():
                 steps = train(train_loader, lr_weights=data_spec_lrweights, **parameters,
                               total_steps=total_steps, steps=steps,
                               scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer,
-                              debug=args.debug)
+                              debug=args.debug, debug_streams=debug_streams)
 
                 val_loss, _ = evaluate(val_loader, **parameters)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
@@ -320,11 +328,12 @@ def main():
                                  '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
                                                               args.prior)))
 
-            if isinstance(prior, VIPrior) and args.debug:
-                prior.dump_nts(LOG_DIR)
-            
             if args.prior == 'vi':
                 sample_weights_hook = model.register_forward_pre_hook(sample_weights)
+
+            if args.debug:
+                for _, stream in debug_streams.items():
+                    stream.close()
 
             if stop:
                 return

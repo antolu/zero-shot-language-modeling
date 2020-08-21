@@ -20,9 +20,6 @@ from regularisation import LockedDropout, WeightDrop
 log = logging.getLogger(__name__)
 
 
-DEBUG = True
-
-
 def softrelu(x: torch.Tensor):
     return torch.log1p(torch.exp(x))
 
@@ -77,24 +74,8 @@ class VIPrior(Prior):
         return loss
 
     def calculate_nts(self):
-        if not DEBUG:
-            raise RuntimeError('DEBUG flag is not set to true. Cannot calculate NtS')
-
+        output = dict()
         for n in self.params:
-            self.nts[n].append((torch.abs(self._means[n]) / (self._log_variance[n] / 2)).exp().clone().detach().cpu())
+            output[n] = (torch.abs(self._means[n]) / (self._log_variance[n] / 2)).exp().clone().detach().cpu()
 
-    def dump_nts(self, dump_dir: str):
-        if not DEBUG:
-            raise RuntimeError('DEBUG flag is not set to true. Cannot calculate NtS')
-
-        for n in self.params:
-            if len(self.nts[n]) == 0:
-                continue
-
-            arr = np.zeros(len(self.nts[n]) * self.nts[n][0].numel())
-
-            for row, step in enumerate(self.nts[n]):
-                arr[row, :] = step.flatten().numpy()
-
-            with open(path.join(dump_dir, f'nts_{n}.npy'), 'wb') as f:
-                np.save(f, arr)
+        return output

@@ -107,7 +107,15 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
                     tb_writer.add_scalar('train/loss+kl', loss.item(), steps)
 
                     if 'debug' in kwargs and kwargs['debug']:
-                        prior.calculate_nts()
+                        if 'debug_streams' not in kwargs:
+                            raise ValueError('debug streams not passed to train')
+
+                        nts = prior.calculate_nts()
+
+                        for n, val in nts.items():
+                            kwargs['debug_streams'][n].write(
+                                ','.join(val)
+                            )
 
                     logging_kl += tr_kl
 
