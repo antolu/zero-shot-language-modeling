@@ -312,6 +312,9 @@ def main():
 
             stop = True
         finally:
+            if args.prior == 'vi':
+                sample_weights_hook.remove()
+
             torch.save(make_checkpoint(epoch, **parameters),
                        path.join(args.checkpoint_dir,
                                  '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
@@ -319,6 +322,9 @@ def main():
 
             if isinstance(prior, VIPrior) and args.debug:
                 prior.dump_nts(LOG_DIR)
+            
+            if args.prior == 'vi':
+                sample_weights_hook = model.register_forward_pre_hook(sample_weights)
 
             if stop:
                 return
