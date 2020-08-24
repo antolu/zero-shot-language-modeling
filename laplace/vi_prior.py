@@ -49,9 +49,6 @@ class VIPrior(Prior):
         for _, p in self._log_variance.items():
             nn.init.uniform_(p, -5, -3)
 
-        if DEBUG:
-            self.nts = {n: list() for n in self.params}
-
     def kl_div(self) -> torch.Tensor:
         kl = 0
 
@@ -76,6 +73,6 @@ class VIPrior(Prior):
     def calculate_nts(self):
         output = dict()
         for n in self.params:
-            output[n] = (torch.abs(self._means[n]) / (self._log_variance[n] / 2)).exp().clone().detach().cpu()
+            output[n] = (torch.abs(self._means[n]) / (self._log_variance[n] / 2)).exp().clone().detach().cpu().flatten()
 
         return output

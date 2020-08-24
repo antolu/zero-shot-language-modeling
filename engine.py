@@ -114,7 +114,7 @@ def train(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
 
                         for n, val in nts.items():
                             kwargs['debug_streams'][n].write(
-                                ','.join(val)
+                                ', '.join([str(elem) for elem in val.tolist()])
                             )
 
                     logging_kl += tr_kl
