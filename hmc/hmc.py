@@ -54,7 +54,6 @@ class HMC:
         device = self.device
 
         parameters = {n: p.clone().detach() for n, p in model.named_parameters()}
-        parameters_with_gradients = {n: p for n, p in model.named_parameters()}
 
         momentum = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
 
@@ -101,13 +100,13 @@ class HMC:
                     loss.backward()
 
                 # first update momentum
-                for n, p in parameters_with_gradients.items():
+                for n, p in model.named_parameters():
                     if p.grad is not None:
-                        momentum[n] = (1.0 - mdecay) * momentum[n] + (-epsilon) * (
-                                    p.grad.data + w_decay * parameters[n])
+                        momentum[n] *= (1.0 - mdecay)
+                        momentum[n] += (-epsilon) * (p.grad.data + w_decay * p)
                         if need_sample:
-                            momentum[n] = momentum[n] + torch.normal(torch.zeros_like(p), torch.tensor(1).to(device)).reshape(parameters[n].shape)
-                        parameters[n] = parameters[n] + momentum[n]
+                            momentum[n] += torch.normal(torch.zeros_like(p), torch.tensor(1).to(device)).reshape(p.shape)
+                        p += momentum[n]
 
                 pbar.set_description('NLL {:5.4f}'.format(loss.data))
                 pbar.update(1)
@@ -115,6 +114,6 @@ class HMC:
             # end for  epoch
         # end for total_iter
 
-        return parameters
+        return {n: p.clone().detach() for n, p in model.named_parameters()}
 
 
