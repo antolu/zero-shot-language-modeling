@@ -29,7 +29,7 @@ class apply_weights:
 
         self.module.load_state_dict(state_dict)
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         """
         Reset parameters
         """

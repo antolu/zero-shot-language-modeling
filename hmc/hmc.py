@@ -51,6 +51,7 @@ class HMC:
 
         mdecay = 0.1
         w_decay = 0.00002
+        device = self.device
 
         parameters = {n: p.clone().detach() for n, p in model.named_parameters()}
         parameters_with_gradients = {n: p for n, p in model.named_parameters()}
@@ -105,8 +106,7 @@ class HMC:
                         momentum[n] = (1.0 - mdecay) * momentum[n] + (-epsilon) * (
                                     p.grad.data + w_decay * parameters[n])
                         if need_sample:
-                            momentum[n] = momentum[n] + torch.normal(0, 1, parameters[n].shape).reshape(
-                                parameters[n].shape)
+                            momentum[n] = momentum[n] + torch.normal(torch.zeros_like(p), torch.tensor(1).to(device)).reshape(parameters[n].shape)
                         parameters[n] = parameters[n] + momentum[n]
 
                 pbar.set_description('NLL {:5.4f}'.format(loss.data))

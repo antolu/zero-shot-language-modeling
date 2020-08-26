@@ -13,7 +13,6 @@ import torch
 import tqdm
 from torch.optim import Adam
 from torch.nn.modules import CrossEntropyLoss
-import hamiltorch
 
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
