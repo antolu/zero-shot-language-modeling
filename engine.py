@@ -217,8 +217,9 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             else:
                 loss = loss_function(output, targets)
 
-            penalty = importance * prior.penalty(model)
-            loss += penalty
+            if isinstance(prior, Prior):
+                penalty = importance * prior.penalty(model)
+                loss += penalty
 
             # Activiation Regularization
             if alpha:

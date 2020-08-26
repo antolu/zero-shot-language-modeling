@@ -156,6 +156,7 @@ def main():
     else:
         loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
 
+    # Initialize optimizers, use FusedAdam if possible for speedup
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     else:
@@ -165,6 +166,7 @@ def main():
     if use_apex:
         model, optimizer = amp.initialize(model, optimizer, opt_level=args.opt_level)
 
+    # Just for less cluttered parameter passing later
     parameters = {
         'model': model,
         'optimizer': optimizer,
@@ -179,6 +181,7 @@ def main():
         'prior': args.prior,
     }
 
+    # for VI prior, we need to create it before the main training loop
     if args.prior == 'vi':
         prior = VIPrior(model, device=device)
         parameters['prior'] = prior
@@ -187,6 +190,8 @@ def main():
             prior.sample_weights(module)
 
         sample_weights_hook = model.register_forward_pre_hook(sample_weights)
+    elif args.prior == 'hmc':
+        raise NotImplementedError
 
     # Load model checkpoint if available
     start_epoch = 1
@@ -217,7 +222,6 @@ def main():
                 p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
 
     saved_models = list()
-
     result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
 
     def test():
@@ -365,7 +369,8 @@ def main():
 
     elif args.prior == 'ninf':
         log.info('Creating non-informative Gaussian prior')
-        parameters['prior'] = GaussianPrior()
+        # parameters['prior'] = GaussianPrior()
+        parameters['prior'] = 'ninf'
     elif args.prior == 'vi':
         importance = 1e-5
     elif args.prior == 'hmc':
@@ -378,10 +383,6 @@ def main():
         importance = args.importance
 
     best_model = saved_models[-1] if not len(saved_models) == 0 else args.checkpoint
-
-    # Remove sampling hook from model
-#    if args.prior == 'vi':
-#        sample_weights_hook.remove()
 
     # Refine on 100 samples on each target
     if args.refine:
