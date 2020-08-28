@@ -110,7 +110,8 @@ class HMC:
         pbar = trange(n_samples)
         i = 0
 
-        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
+#        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
+        fishers_matrices = None
 
         for t in range(self.num_burn + n_samples):
             for l in range(1, step_size):
@@ -156,7 +157,7 @@ class HMC:
                         momentum[n] *= (1.0 - self.m_decay)
                         momentum[n] += (-self.lr) * (p.grad.data + self.w_decay[n] * p.data)  # second term is regularizer
                         if need_sample:
-                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma(fishers_matrices[n])).reshape(p.shape)
+                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
                         p.data += momentum[n]
 
                 log.debug(f'Iteration {i} | NLL {loss.item():5.4f}')
@@ -191,7 +192,7 @@ class HMC:
         else:
             alpha = 1 - self.m_decay
             beta_hat = self.lr * fishers_matrix / 2
-            return torch.sqrt(torch.tensor(2 * (alpha - beta_hat) * self.lr)).to(self.device)
+            return torch.sqrt(2 * (alpha - beta_hat) * self.lr / self.num_train).to(self.device)
 
     def __update_parameter(self, parameters: Dict[str, nn.Parameter]):
 
