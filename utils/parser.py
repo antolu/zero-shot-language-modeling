@@ -9,6 +9,7 @@ def get_args():
                         help='Path to the root directory containing the datasets.')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', dest='checkpoint_dir',
                         help='The directory to save training checkpoints to')
+    parser.add_argument('--logdir', type=str, default='logs', help='The directory to write logs to')
     parser.add_argument('--checkpoint', type=str, default=None, help='path to pretrained-model')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild the data vectors.')
     parser.add_argument('--only-build-data', action='store_true',

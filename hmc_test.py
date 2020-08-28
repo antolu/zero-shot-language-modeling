@@ -13,6 +13,7 @@ import torch
 import tqdm
 from torch.optim import Adam
 from torch.nn.modules import CrossEntropyLoss
+from torch.utils.tensorboard import SummaryWriter
 
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
@@ -23,18 +24,9 @@ from utils import make_checkpoint, load_model
 from regularisation import WeightDrop
 from hmc import HMC, apply_weights
 
-timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
-
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
-ch.setFormatter(formatter)
-
-log.addHandler(ch)
 
 
 def main():
@@ -42,6 +34,26 @@ def main():
 
     log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
     assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
+
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+
+    writer_dir = path.join(args.logdir, f'zerolm_{timestamp}')
+    tb_writer = SummaryWriter(writer_dir)
+
+    fh = logging.FileHandler(path.join(writer_dir, 'log.log'))
+    fh.setLevel(logging.DEBUG)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+
+    formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+
+    log.addHandler(fh)
+    log.addHandler(ch)
+
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     if torch.cuda.is_available():
@@ -182,9 +194,8 @@ def main():
 
         log.info('=' * 89)
 
-    hmc = HMC(model=model, lr=0.01, w_decay=0.0, m_decay=0.01, num_burn=1000, use_apex=use_apex, amp=amp, device=device)
+    hmc = HMC(model=model, lr=0.001, w_decay=0.0, m_decay=0.01, num_burn=1000, use_apex=use_apex, amp=amp, device=device)
 
-    original_model = model.state_dict()
     average_results, all_results = hmc.sample(dataloader=train_loader, **parameters, total_iter=600, epoch_length=60)
 
     for lang, avg_l_loss in average_results.items():
