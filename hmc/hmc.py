@@ -151,19 +151,19 @@ class HMC:
                 for n, p in model.named_parameters():
                     if p.grad is not None:
                         momentum[n] *= (1.0 - self.m_decay)
-                        momentum[n] += (-self.lr) * (p.grad.data + self.w_decay * p.data)  # second term is regularizer
+                        momentum[n] += (-self.lr) * (p.grad.data + self.w_decay[n] * p.data)  # second term is regularizer
                         if need_sample:
                             momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
-                        with torch.no_grad():
-                            p += momentum[n]
+                        p.data += momentum[n]
 
                 log.debug(f'Iteration {i} | NLL {loss.item():5.4f}')
                 pbar.set_description('NLL {:5.4f}'.format(loss.item()))
                 pbar.update(1)
 
             # end for  epoch
-            if i >= self.num_burn:
-                evaluator(i)
+#            if i >= self.num_burn:
+#                evaluator(i)
+#                self.model.train()
         # end for total_iter
 
         return evaluator.average_log_likelihood, evaluator.log_likelihoods
@@ -206,5 +206,5 @@ class HMC:
 
         for n, p in parameters.items():
             self.w_decay[n] = p_lambda / self.num_train
-            log.debug(f'[n] Changed w_decay to {self.w_decay[n]}')
+            log.debug(f'[{n}] Changed w_decay to {self.w_decay[n]}')
 

@@ -194,15 +194,19 @@ def main():
 
         log.info('=' * 89)
 
-    hmc = HMC(model=model, lr=0.001, w_decay=0.0, m_decay=0.01, num_burn=args.num_burn,
+    hmc = HMC(model=model, lr=args.lr, w_decay=args.wdecay, m_decay=0.01, num_burn=args.num_burn,
               w_decay_update=args.wdecay_update, use_apex=use_apex, amp=amp, device=device)
 
-    average_results, all_results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters, n_samples=600, step_size=60)
+    average_results, all_results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters, n_samples=args.n_samples, step_size=60)
 
     for lang, avg_l_loss in average_results.items():
         langstr = dictionary.idx2lang[lang]
         result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
         log.info(result)
+
+    for lang, res in all_results.items():
+        for item in res:
+            log.debug(item)
 
 
     # Only test on existing languages if there are no held out languages
