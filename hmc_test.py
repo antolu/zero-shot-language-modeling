@@ -182,13 +182,13 @@ def main():
 
         log.info('=' * 89)
 
-    hmc = HMC(use_apex=use_apex, amp=amp, device=device)
+    hmc = HMC(model=model, lr=0.01, w_decay=0.0, m_decay=0.01, num_burn=1000, use_apex=use_apex, amp=amp, device=device)
 
-    hmc_params = hmc.sample(dataloader=train_loader, **parameters, epsilon=0.1, total_iter=600, epoch_length=60)
+    original_model = model.state_dict()
+    hmc_params = hmc.sample(dataloader=train_loader, **parameters, total_iter=600, epoch_length=60)
 
-    with apply_weights(model, hmc_params):
-        with torch.no_grad():
-            test()
+    with apply_weights(model, hmc_params) and torch.no_grad():
+        test()
 
     # Only test on existing languages if there are no held out languages
     if not args.target_langs:

@@ -1,80 +1,121 @@
-from typing import Union
+from typing import Union, List, OrderedDict
 
 import torch
 from torch import nn
 from tqdm import trange
+import numpy as np
 
 from criterion import SplitCrossEntropyLoss
 from data import DataLoader
 from utils import detach
+import logging
+
+
+log = logging.getLogger(__name__)
 
 
 class HMC:
-    def __init__(self, use_apex: bool = None, amp=None, device: Union[torch.device, str] = 'cpu', **kwargs):
+    def __init__(self, model: nn.Module, lr: float, m_decay: float, w_decay: float, num_burn: int, temp: float = 1.0,
+                 regulariser: str = 'gamma', use_apex: bool = None, amp=None, alpha: float = 1.0, beta: float = 1.0,
+                 device: Union[torch.device, str] = 'cpu', **kwargs):
+        """
+
+        Parameters
+        ----------
+        parameters : List[nn.Parameter]
+            A list of parameters that we are going to sample. This is only to initalise parameters
+        lr : float
+            Learning rate, or eta as written in eq 15 in Chen et al.
+        m_decay : float
+            Momentum decay
+        w_decay : float
+            Weight decay
+        num_burn : int
+            Number of burn-in rounds, start averaging after num_burn
+        temp : float
+            Temperature. temp=0 means no noise during sampling (MAP inference)
+        regulariser : str
+            Which regulariser to use, choose between gamma, gaussian
+        use_apex : bool
+            Use Nvidia APEX for AMP
+        amp :
+            An initialised AMP engine
+        device : torch.device or str
+            The device to create parameters on
+        kwargs :
+        """
+        self.lr = lr
+        self.m_decay = m_decay
+        self.temp = temp
+        self.num_burn = num_burn
+        self.regulariser = regulariser
         self.use_apex = use_apex
         self.amp = amp
         self.device = device
 
-    def sample(self, model: nn.Module, dataloader: DataLoader,
+        self.alpha = alpha
+        self.beta = beta
+
+        self.model = model
+
+        self.parameters = [n for n, _ in model.named_parameters()]
+        self.w_decay = w_decay
+
+        self.num_train = -1
+
+    def sample(self, dataloader: DataLoader,
                loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
-               epsilon: float, total_iter: int, epoch_length: int,
-               mass: float = 1.0, optimizer: torch.optim.Optimizer = None,
-               need_sample: bool = True, **kwargs):
+               total_iter: int, epoch_length: int, optimizer: torch.optim.Optimizer = None,
+               need_sample: bool = True, **kwargs) -> OrderedDict:
         """
         Perform HMC sampling
 
         Parameters
         ----------
-        model : nn.Module
-            The neural network to sample from. A gaussian prior will be used to provide L2 regularisation.
         dataloader: DataLoader
             Dataloader. Should inherit from torch.utils.data.DataLoader.
         loss_function : Union[torch.nn.CrossEntropyLoss, SplitEntropyLoss]
             Criterion. Required to calculate gradients.
-        epsilon : float
-            The step size
         total_iter : int
             Total number of iterations to perform
         epoch_length : int
             Number of steps to perform for each 'epoch', i.e. the inner loop
-        mass : float
-            The mass of the particle in the dynamical system, or in otherwise the variance of the momentum covariance matrix
         optimizer : torch.optim.Optimizer
             A PyTorch optimizer used to calculate gradients if apex is enabled (use_apex is set to True)
 
         Returns
         -------
-        dict
-            A dictionary with key-value pairs <param_name: str, param: nn.Parameter>
+        OrderedDict
+            A PyTorch state dict containing the sampled parameters of the model
 
         """
 
-        mdecay = 0.1
-        w_decay = 0.00002
         device = self.device
-
-        parameters = {n: p.clone().detach() for n, p in model.named_parameters()}
+        model = self.model
 
         momentum = {n: torch.zeros_like(p) for n, p in model.named_parameters()}
 
-        momentum_sampler = torch.distributions.normal.Normal(torch.tensor(0.).to(self.device),
-                                                             torch.tensor(mass).to(self.device))
-
         data_iter = iter(dataloader)
+
+        self.num_train = len(dataloader.dataset)
+        log.debug(f'New batches, number of training iterations: {self.num_train}')
 
         pbar = trange(total_iter)
 
         for t in range(total_iter // epoch_length):
-            for n, p in parameters.items():
-                momentum[n] = momentum_sampler.sample(p.shape)
-
             for l in range(1, epoch_length):
                 i = t * epoch_length + l
 
                 try:
                     data, targets, seq_len, lang = next(data_iter)
                 except StopIteration:  # out of data, create a new dataloader iterator
+                    # Resample regularisation hyperparameters
+                    self.update_hyperparameter()
+
                     data_iter = iter(dataloader)
+                    self.num_train = len(dataloader.dataset)
+                    log.debug(f'New batches, number of training iterations: {self.num_train}')
+
                     data, targets, seq_len, lang = next(data_iter)
 
                 data = data.squeeze(0).to(self.device)
@@ -99,21 +140,56 @@ class HMC:
                 else:
                     loss.backward()
 
-                # first update momentum
+                # Update parameters with SGHMC
                 for n, p in model.named_parameters():
                     if p.grad is not None:
-                        momentum[n] *= (1.0 - mdecay)
-                        momentum[n] += (-epsilon) * (p.grad.data + w_decay * p)
+                        momentum[n] *= (1.0 - self.m_decay)
+                        momentum[n] += (-self.lr) * (p.grad.data + self.w_decay * p.data)  # second term is regularizer
                         if need_sample:
-                            momentum[n] += torch.normal(torch.zeros_like(p), torch.tensor(1).to(device)).reshape(p.shape)
-                        p += momentum[n]
+                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
+                        with torch.no_grad():
+                            p += momentum[n]
 
-                pbar.set_description('NLL {:5.4f}'.format(loss.data))
+                log.debug(f'Iteration {i} | NLL {loss.item():5.4f}')
+                pbar.set_description('NLL {:5.4f}'.format(loss.item()))
                 pbar.update(1)
 
             # end for  epoch
         # end for total_iter
 
-        return {n: p.clone().detach() for n, p in model.named_parameters()}
+        return model.state_dict()
+
+    def update_hyperparameter(self):
+
+        s_counter = 0
+
+        sum_sqr = 0
+        sum_cnt = 0
+        for n, p in self.model.named_parameters():
+            sum_sqr += p.pow(2).sum()
+            sum_cnt += p.numel()
+
+        alpha = self.alpha + 0.5 * sum_cnt
+        beta = self.beta + 0.5 * sum_sqr
+
+        if self.temp < 1e-6:
+            # if we are doing MAP, take the mode. note: normally MAP adjust is not as well as MCMC
+            p_lambda = max(alpha - 1.0, 0.0) / beta
+        else:
+            p_lambda = np.random.gamma(alpha, 1.0/beta)
+
+        self.w_decay = p_lambda / self.num_train
+
+        log.debug(f'Changed w_decay to {self.w_decay}')
+
+    def get_sigma(self):
+        if self.num_train == -1:
+            raise ValueError('num_train has not been set')
+        if self.m_decay - 1.0 > -1e-5:
+            scale = self.lr / self.num_train
+        else:
+            scale = self.lr * self.m_decay / self.num_train
+        return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)
+
 
 
