@@ -1,4 +1,4 @@
-from typing import Union, List, OrderedDict
+from typing import Union, List, OrderedDict, Tuple
 
 import torch
 from torch import nn
@@ -7,9 +7,9 @@ import numpy as np
 
 from criterion import SplitCrossEntropyLoss
 from data import DataLoader
+from . import HMCEvaluator
 from utils import detach
 import logging
-
 
 log = logging.getLogger(__name__)
 
@@ -63,10 +63,10 @@ class HMC:
 
         self.num_train = -1
 
-    def sample(self, dataloader: DataLoader,
+    def sample(self, dataloader: DataLoader, eval_dataloader: DataLoader,
                loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
                total_iter: int, epoch_length: int, optimizer: torch.optim.Optimizer = None,
-               need_sample: bool = True, **kwargs) -> OrderedDict:
+               need_sample: bool = True, **kwargs) -> Tuple[dict, dict]:
         """
         Perform HMC sampling
 
@@ -85,7 +85,7 @@ class HMC:
 
         Returns
         -------
-        OrderedDict
+        Tuple[dict, dict]
             A PyTorch state dict containing the sampled parameters of the model
 
         """
@@ -100,7 +100,9 @@ class HMC:
         self.num_train = len(dataloader.dataset)
         log.debug(f'New batches, number of training iterations: {self.num_train}')
 
+        evaluator = HMCEvaluator(self.num_burn, self.model, eval_dataloader, loss_function, device=self.device)
         pbar = trange(total_iter)
+        i = 0
 
         for t in range(total_iter // epoch_length):
             for l in range(1, epoch_length):
@@ -155,9 +157,11 @@ class HMC:
                 pbar.update(1)
 
             # end for  epoch
+            if i >= self.num_burn:
+                evaluator(i)
         # end for total_iter
 
-        return model.state_dict()
+        return evaluator.average_log_likelihood, evaluator.log_likelihoods
 
     def update_hyperparameter(self):
 
@@ -172,11 +176,13 @@ class HMC:
         alpha = self.alpha + 0.5 * sum_cnt
         beta = self.beta + 0.5 * sum_sqr
 
+        beta = beta.item()
+
         if self.temp < 1e-6:
             # if we are doing MAP, take the mode. note: normally MAP adjust is not as well as MCMC
             p_lambda = max(alpha - 1.0, 0.0) / beta
         else:
-            p_lambda = np.random.gamma(alpha, 1.0/beta)
+            p_lambda = np.random.gamma(alpha, 1.0 / beta)
 
         self.w_decay = p_lambda / self.num_train
 
@@ -190,6 +196,3 @@ class HMC:
         else:
             scale = self.lr * self.m_decay / self.num_train
         return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)
-
-
-
