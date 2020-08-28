@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 class HMCEvaluator:
-    def __init__(self, num_burn: int, model: nn.Module, dataloader: DataLoader, criterion: torch.nn.modules._Loss,
+    def __init__(self, num_burn: int, model: nn.Module, dataloader: DataLoader, criterion: torch.nn.modules.loss._Loss,
                  device: str = 'cpu'):
         self.round_counter = 0
         self.sum_w_sample = 0.0

@@ -7,7 +7,7 @@ import numpy as np
 
 from criterion import SplitCrossEntropyLoss
 from data import DataLoader
-from . import HMCEvaluator
+from .evaluator import HMCEvaluator
 from utils import detach
 import logging
 
