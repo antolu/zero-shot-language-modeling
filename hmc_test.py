@@ -185,10 +185,13 @@ def main():
     hmc = HMC(model=model, lr=0.01, w_decay=0.0, m_decay=0.01, num_burn=1000, use_apex=use_apex, amp=amp, device=device)
 
     original_model = model.state_dict()
-    hmc_params = hmc.sample(dataloader=train_loader, **parameters, total_iter=600, epoch_length=60)
+    average_results, all_results = hmc.sample(dataloader=train_loader, **parameters, total_iter=600, epoch_length=60)
 
-    with apply_weights(model, hmc_params) and torch.no_grad():
-        test()
+    for lang, avg_l_loss in average_results.items():
+        langstr = dictionary.idx2lang[lang]
+        result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+        log.info(result)
+
 
     # Only test on existing languages if there are no held out languages
     if not args.target_langs:
