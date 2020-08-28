@@ -72,7 +72,7 @@ class HMC:
     def sample(self, dataloader: DataLoader, eval_dataloader: DataLoader,
                loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
                n_samples: int, step_size: int, optimizer: torch.optim.Optimizer = None,
-               need_sample: bool = True, **kwargs) -> Tuple[dict, dict]:
+               sample_every: int = 1, **kwargs) -> Tuple[dict, dict]:
         """
         Perform HMC sampling
 
@@ -88,6 +88,8 @@ class HMC:
             Number of steps to perform for each simulation, i.e. the inner loop
         optimizer : torch.optim.Optimizer
             A PyTorch optimizer used to calculate gradients if apex is enabled (use_apex is set to True)
+        sample_every : int
+            Sample every [value] time step
 
         Returns
         -------
@@ -113,7 +115,7 @@ class HMC:
 #        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
         fishers_matrices = None
 
-        for t in range(self.num_burn + n_samples):
+        for t in range(self.num_burn + n_samples * sample_every):
             for l in range(1, step_size):
                 i = t * step_size + l
 
@@ -156,8 +158,7 @@ class HMC:
                     if p.grad is not None:
                         momentum[n] *= (1.0 - self.m_decay)
                         momentum[n] += (-self.lr) * (p.grad.data + self.w_decay[n] * p.data)  # second term is regularizer
-                        if need_sample:
-                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
+                        momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
                         p.data += momentum[n]
 
                 log.debug(f'Iteration {i} | NLL {loss.item():5.4f}')
@@ -165,9 +166,9 @@ class HMC:
                 pbar.update(1)
 
             # end for  epoch
-#            if i >= self.num_burn:
-#                evaluator(i)
-#                self.model.train()
+            if (t - self.num_burn) % n_samples == sample_every:
+                evaluator(t)
+                self.model.train()
         # end for total_iter
 
         return evaluator.average_log_likelihood, evaluator.log_likelihoods

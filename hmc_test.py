@@ -197,7 +197,9 @@ def main():
     hmc = HMC(model=model, lr=args.lr, w_decay=args.wdecay, m_decay=0.01, num_burn=args.num_burn,
               w_decay_update=args.wdecay_update, use_apex=use_apex, amp=amp, device=device)
 
-    average_results, all_results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters, n_samples=args.n_samples, step_size=150)
+    average_results, all_results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters,
+                                              n_samples=args.n_samples, step_size=args.step_size,
+                                              sample_every=args.sample_every)
 
     for lang, avg_l_loss in average_results.items():
         langstr = dictionary.idx2lang[lang]

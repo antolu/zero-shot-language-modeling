@@ -36,7 +36,7 @@ class HMCEvaluator:
             self.average_log_likelihood[language] += alpha * loss
             self.log_likelihoods[language].append(loss)
 
-        log.debug(f'LL: {total_loss}')
+        log.debug(f'Time step {round_counter} | LL: {total_loss}')
 
     def __get_alpha(self):
         if self.round_counter < self.num_burn:

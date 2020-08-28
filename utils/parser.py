@@ -107,6 +107,10 @@ def get_args():
     parser.add_argument('--wdecay-update', dest='wdecay_update', type=str, choices=['sep', 'joint'], default='sep',
                         help='For HMC sampling, update the weight decay hyperparameter for each parameter separately'
                              'or use the same weight decay value for all parameters.')
+    parser.add_argument('--step-size', dest='step_size', type=int, default=100,
+                        help='How update steps within one time step during HMC sampling')
+    parser.add_argument('--sample-every', dest='sample_every', type=int, default=50,
+                        help='Sample every [value] time step during HMC sampling')
 
     args = parser.parse_args()
 
