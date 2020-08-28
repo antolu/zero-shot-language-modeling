@@ -1,4 +1,4 @@
-from typing import Union, List, OrderedDict, Tuple
+from typing import Union, List, OrderedDict, Tuple, Dict
 
 import torch
 from torch import nn
@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 class HMC:
     def __init__(self, model: nn.Module, lr: float, m_decay: float, w_decay: float, num_burn: int, temp: float = 1.0,
                  regulariser: str = 'gamma', use_apex: bool = None, amp=None, alpha: float = 1.0, beta: float = 1.0,
-                 device: Union[torch.device, str] = 'cpu', **kwargs):
+                 w_decay_update: str = 'sep', device: Union[torch.device, str] = 'cpu', **kwargs):
         """
 
         Parameters
@@ -61,11 +61,16 @@ class HMC:
         self.parameters = [n for n, _ in model.named_parameters()]
         self.w_decay = w_decay
 
+        if w_decay_update not in ['sep', 'joint']:
+            raise ValueError("w_decay_update must be either 'sep' or 'joint'")
+        self.w_decay_update = w_decay_update
+        self.w_decay = {n: w_decay for n in self.parameters}
+
         self.num_train = -1
 
     def sample(self, dataloader: DataLoader, eval_dataloader: DataLoader,
                loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
-               total_iter: int, epoch_length: int, optimizer: torch.optim.Optimizer = None,
+               n_samples: int, step_size: int, optimizer: torch.optim.Optimizer = None,
                need_sample: bool = True, **kwargs) -> Tuple[dict, dict]:
         """
         Perform HMC sampling
@@ -76,10 +81,10 @@ class HMC:
             Dataloader. Should inherit from torch.utils.data.DataLoader.
         loss_function : Union[torch.nn.CrossEntropyLoss, SplitEntropyLoss]
             Criterion. Required to calculate gradients.
-        total_iter : int
+        n_samples : int
             Total number of iterations to perform
-        epoch_length : int
-            Number of steps to perform for each 'epoch', i.e. the inner loop
+        step_size : int
+            Number of steps to perform for each simulation, i.e. the inner loop
         optimizer : torch.optim.Optimizer
             A PyTorch optimizer used to calculate gradients if apex is enabled (use_apex is set to True)
 
@@ -101,12 +106,12 @@ class HMC:
         log.debug(f'New batches, number of training iterations: {self.num_train}')
 
         evaluator = HMCEvaluator(self.num_burn, self.model, eval_dataloader, loss_function, device=self.device)
-        pbar = trange(total_iter)
+        pbar = trange(n_samples)
         i = 0
 
-        for t in range(total_iter // epoch_length):
-            for l in range(1, epoch_length):
-                i = t * epoch_length + l
+        for t in range(self.num_burn + n_samples):
+            for l in range(1, step_size):
+                i = t * step_size + l
 
                 try:
                     data, targets, seq_len, lang = next(data_iter)
@@ -164,12 +169,27 @@ class HMC:
         return evaluator.average_log_likelihood, evaluator.log_likelihoods
 
     def update_hyperparameter(self):
+        if self.w_decay_update == 'joint':
+            self.__update_parameter({n: p for n, p in self.model.named_parameters()})
+        elif self.w_decay_update == 'sep':
+            for n, p in self.model.named_parameters():
+                self.__update_parameter({n: p})
 
-        s_counter = 0
+    def get_sigma(self):
+        if self.num_train == -1:
+            raise ValueError('num_train has not been set')
+        if self.m_decay - 1.0 > -1e-5:
+            scale = self.lr / self.num_train
+        else:
+            scale = self.lr * self.m_decay / self.num_train
+        return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)
+
+    def __update_parameter(self, parameters: Dict[str, nn.Parameter]):
 
         sum_sqr = 0
         sum_cnt = 0
-        for n, p in self.model.named_parameters():
+
+        for n, p in parameters.items():
             sum_sqr += p.pow(2).sum()
             sum_cnt += p.numel()
 
@@ -184,15 +204,7 @@ class HMC:
         else:
             p_lambda = np.random.gamma(alpha, 1.0 / beta)
 
-        self.w_decay = p_lambda / self.num_train
+        for n, p in parameters.items():
+            self.w_decay[n] = p_lambda / self.num_train
+            log.debug(f'[n] Changed w_decay to {self.w_decay[n]}')
 
-        log.debug(f'Changed w_decay to {self.w_decay}')
-
-    def get_sigma(self):
-        if self.num_train == -1:
-            raise ValueError('num_train has not been set')
-        if self.m_decay - 1.0 > -1e-5:
-            scale = self.lr / self.num_train
-        else:
-            scale = self.lr * self.m_decay / self.num_train
-        return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)

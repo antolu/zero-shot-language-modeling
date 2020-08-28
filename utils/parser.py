@@ -100,6 +100,14 @@ def get_args():
 
     parser.add_argument('--debug', action='store_true', help='Enable additional debug output')
 
+    # HMC parameters
+    parser.add_argument('--num-burn', dest='num_burn', type=int, default=250,
+                        help='How many samples to skip before starting to sample using HMC (commonly known as burn-in '
+                             'or warm-up for MCMC')
+    parser.add_argument('--wdecay-update', dest='wdecay_update', type=str, choices=['sep', 'joint'], default='sep',
+                        help='For HMC sampling, update the weight decay hyperparameter for each parameter separately'
+                             'or use the same weight decay value for all parameters.')
+
     args = parser.parse_args()
 
     return args
