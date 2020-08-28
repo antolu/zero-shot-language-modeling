@@ -9,6 +9,7 @@ from criterion import SplitCrossEntropyLoss
 from data import DataLoader
 from .evaluator import HMCEvaluator
 from utils import detach
+from laplace.laplaceprior import _diag_fisher as fisher
 import logging
 
 log = logging.getLogger(__name__)
@@ -109,6 +110,8 @@ class HMC:
         pbar = trange(n_samples)
         i = 0
 
+        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
+
         for t in range(self.num_burn + n_samples):
             for l in range(1, step_size):
                 i = t * step_size + l
@@ -153,7 +156,7 @@ class HMC:
                         momentum[n] *= (1.0 - self.m_decay)
                         momentum[n] += (-self.lr) * (p.grad.data + self.w_decay * p.data)  # second term is regularizer
                         if need_sample:
-                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma()).reshape(p.shape)
+                            momentum[n] += torch.normal(torch.zeros_like(p), self.get_sigma(fishers_matrices[n])).reshape(p.shape)
                         with torch.no_grad():
                             p += momentum[n]
 
@@ -175,14 +178,20 @@ class HMC:
             for n, p in self.model.named_parameters():
                 self.__update_parameter({n: p})
 
-    def get_sigma(self):
+    def get_sigma(self, fishers_matrix=None):
         if self.num_train == -1:
             raise ValueError('num_train has not been set')
         if self.m_decay - 1.0 > -1e-5:
             scale = self.lr / self.num_train
         else:
             scale = self.lr * self.m_decay / self.num_train
-        return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)
+
+        if fishers_matrix is None:
+            return torch.sqrt(torch.tensor(2.0 * self.temp * scale)).to(self.device)
+        else:
+            alpha = 1 - self.m_decay
+            beta_hat = self.lr * fishers_matrix / 2
+            return torch.sqrt(torch.tensor(2 * (alpha - beta_hat) * self.lr)).to(self.device)
 
     def __update_parameter(self, parameters: Dict[str, nn.Parameter]):
 
