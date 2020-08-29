@@ -217,7 +217,7 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             else:
                 loss = loss_function(output, targets)
 
-            if isinstance(prior, Prior):
+            if isinstance(prior, Prior) and not isinstance(prior, VIPrior):
                 penalty = importance * prior.penalty(model)
                 loss += penalty
             else:
@@ -243,4 +243,4 @@ def refine(dataloader: DataLoader, model: RNN, optimizer: torch.optim.Optimizer,
             batch += 1
 
             pbar.set_description(
-                'Loss {:5.2f} | bpc {:9.3f} | penalty {} |'.format(loss, loss / math.log(2), penalty.item()))
+                'Loss {:5.2f} | bpc {:9.3f} | penalty {} |'.format(loss, loss / math.log(2), penalty.item() if isinstance(penalty, torch.Tensor) else penalty ))
