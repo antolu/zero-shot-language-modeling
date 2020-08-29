@@ -72,7 +72,7 @@ class HMC:
         self.evaluators = dict()
 
     def sample(self, dataloader: DataLoader, 
-               loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
+               criterion: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
                n_samples: int, step_size: int, optimizer: torch.optim.Optimizer = None,
                sample_every: int = 1, **kwargs) -> Tuple[dict, dict]:
         """
@@ -82,7 +82,7 @@ class HMC:
         ----------
         dataloader: DataLoader
             Dataloader. Should inherit from torch.utils.data.DataLoader.
-        loss_function : Union[torch.nn.CrossEntropyLoss, SplitEntropyLoss]
+        criterion : Union[torch.nn.CrossEntropyLoss, SplitEntropyLoss]
             Criterion. Required to calculate gradients.
         n_samples : int
             Total number of iterations to perform
@@ -113,7 +113,7 @@ class HMC:
         pbar = trange(self.num_burn + n_samples * sample_every)
         i = 0
 
-#        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
+#        fishers_matrices = fisher(self.model, criterion, dataloader, optimizer, device=device)
         fishers_matrices = None
 
         for t in range(self.num_burn + n_samples * sample_every):
@@ -143,10 +143,10 @@ class HMC:
 
                 output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, lang, return_h=True)
 
-                if isinstance(loss_function, SplitCrossEntropyLoss):
-                    loss = loss_function(model.decoder.weight, model.decoder.bias, output, targets)
+                if isinstance(criterion, SplitCrossEntropyLoss):
+                    loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
                 else:
-                    loss = loss_function(output, targets)
+                    loss = criterion(output, targets)
 
                 if self.use_apex:
                     with self.amp.scale_loss(loss, optimizer) as scaled_loss:

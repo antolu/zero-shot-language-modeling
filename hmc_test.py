@@ -151,15 +151,15 @@ def main():
                     wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
     if args.opt_level != 'O2' or not use_apex:  # Splitcross is not compatible with O2 optimization for amp
-        loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+        criterion = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
     else:
-        loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+        criterion = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
 
     # Initialize optimizers, use FusedAdam if possible for speedup
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     else:
-        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(loss_function.parameters())
+        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(criterion.parameters())
         optimizer = Adam(params, lr=args.lr, weight_decay=args.wdecay)
 
     if use_apex:
@@ -169,7 +169,7 @@ def main():
     parameters = {
         'model': model,
         'optimizer': optimizer,
-        'loss_function': loss_function,
+        'criterion': criterion,
         'use_apex': use_apex,
         'amp': amp if use_apex else None,
         'clip': args.clip,

@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 class HMCEvaluator:
-    def __init__(self, num_burn: int, dataloader: DataLoader):
+    def __init__(self, num_burn: int, engine: Engine, dataloader: DataLoader):
         self.round_counter = 0
         self.sum_w_sample = 0.0
         self.w_sample = 1.0
