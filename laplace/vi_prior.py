@@ -66,7 +66,7 @@ class VIPrior(Prior):
         loss = 0
         for n, p in model.named_parameters():
             if p.requires_grad:
-                _loss = self._log_variance[n] + (p - self._means[n])**2 * self._log_variance[n].exp()
+                _loss = (p - self._means[n])**2 * self._log_variance[n].exp()
                 loss += _loss.sum()
         return loss
 

@@ -237,8 +237,8 @@ class Engine:
                 else:
                     loss = self.criterion(output, targets)
 
-                if isinstance(prior, Prior):
-                    penalty = importance * prior.penalty(self.model)
+                if isinstance(prior, Prior) and not isinstance(prior, VIPrior):
+                    penalty = importance * prior.penalty(model)
                     loss += penalty
                 else:
                     penalty = 'N/A'
@@ -263,4 +263,4 @@ class Engine:
                 i_batch += 1
 
                 pbar.set_description(
-                    'Loss {:5.2f} | bpc {:9.3f} | penalty {} |'.format(loss, loss / math.log(2), penalty.item()))
+                    'Loss {:5.2f} | bpc {:9.3f} | penalty {} |'.format(loss, loss / math.log(2), penalty.item() if isinstance(penalty, torch.Tensor) else penalty ))
