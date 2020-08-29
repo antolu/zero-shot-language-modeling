@@ -17,12 +17,12 @@ from torch.utils.tensorboard import SummaryWriter
 
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
-from engine import train, evaluate, refine
+from engine import Engine
 from models import RNN
 from utils.parser import get_args
 from utils import make_checkpoint, load_model
 from regularisation import WeightDrop
-from hmc import HMC, apply_weights
+from hmc import HMC, apply_weights, HMCEvaluator
 
 
 log = logging.getLogger()
@@ -32,7 +32,6 @@ log.setLevel(logging.DEBUG)
 def main():
     args = get_args()
 
-    log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
     assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
 
 
@@ -53,6 +52,9 @@ def main():
 
     log.addHandler(fh)
     log.addHandler(ch)
+
+
+    log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
 
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -178,13 +180,25 @@ def main():
         'prior': args.prior,
     }
 
+    # Add backward hook for gradient clipping
+    if args.clip:
+        if use_apex:
+            for p in amp.master_params(optimizer):
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+        else:
+            for p in model.parameters():
+                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
+
+
     saved_models = list()
     result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
+
+    engine = Engine(**parameters)
 
     def test():
         log.info('=' * 89)
         log.info('Running test set (zero-shot results)...')
-        test_loss, avg_loss = evaluate(test_loader, **parameters)
+        test_loss, avg_loss = engine.evaluate(test_loader, **parameters)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
 
         for lang, avg_l_loss in avg_loss.items():
@@ -196,19 +210,24 @@ def main():
 
     hmc = HMC(model=model, lr=args.lr, w_decay=args.wdecay, m_decay=0.01, num_burn=args.num_burn,
               w_decay_update=args.wdecay_update, use_apex=use_apex, amp=amp, device=device)
+    hmc.add_evaluator('train', HMCEvaluator(args.num_burn, engine, train_loader))
+    hmc.add_evaluator('validation', HMCEvaluator(args.num_burn, engine, val_loader))
 
-    average_results, all_results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters,
+    results = hmc.sample(dataloader=train_loader, eval_dataloader=val_loader, **parameters,
                                               n_samples=args.n_samples, step_size=args.step_size,
                                               sample_every=args.sample_every)
+    for name, eval_results in results.items():
+        average_results, all_results = eval_results
+        for lang, avg_l_loss in average_results.items():
+            langstr = dictionary.idx2lang[lang]
+            result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
+            log.info(result)
 
-    for lang, avg_l_loss in average_results.items():
-        langstr = dictionary.idx2lang[lang]
-        result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
-        log.info(result)
-
-    for lang, res in all_results.items():
-        for item in res:
-            log.debug(item)
+        for lang, res in all_results.items():
+            with open(path.join(writer_dir, f'{name}_{lang}.csv')) as f:
+                for item in res:
+                    timestep, val = item
+                    f.write(f'{timestep}, {item}')
 
 
     # Only test on existing languages if there are no held out languages

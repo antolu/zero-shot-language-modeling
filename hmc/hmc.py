@@ -69,7 +69,9 @@ class HMC:
 
         self.num_train = -1
 
-    def sample(self, dataloader: DataLoader, eval_dataloader: DataLoader,
+        self.evaluators = dict()
+
+    def sample(self, dataloader: DataLoader, 
                loss_function: Union[torch.nn.CrossEntropyLoss, SplitCrossEntropyLoss],
                n_samples: int, step_size: int, optimizer: torch.optim.Optimizer = None,
                sample_every: int = 1, **kwargs) -> Tuple[dict, dict]:
@@ -108,8 +110,7 @@ class HMC:
         self.num_train = len(dataloader.dataset)
         log.debug(f'New batches, number of training iterations: {self.num_train}')
 
-        evaluator = HMCEvaluator(self.num_burn, self.model, eval_dataloader, loss_function, device=self.device)
-        pbar = trange(n_samples)
+        pbar = trange(self.num_burn + n_samples * sample_every)
         i = 0
 
 #        fishers_matrices = fisher(self.model, loss_function, dataloader, optimizer, device=device)
@@ -166,12 +167,18 @@ class HMC:
                 pbar.update(1)
 
             # end for  epoch
-            if (t - self.num_burn) % n_samples == sample_every:
-                evaluator(t)
+            if i > self.num_burn and t % sample_every == 0:
+                for _, evaluator in self.evaluators.items():
+                    evaluator(t)
                 self.model.train()
         # end for total_iter
 
-        return evaluator.average_log_likelihood, evaluator.log_likelihoods
+        return {name: (evaluator.average_log_likelihood, evaluator.log_likelihoods) for name, evaluator in self.evaluators.items()}
+
+    def add_evaluator(self, name: str, evaluator: HMCEvaluator):
+        if name in self.evaluators:
+            raise ValueError(f'An evaluator with name {name} is already registered')
+        self.evaluators[name] = evaluator
 
     def update_hyperparameter(self):
         if self.w_decay_update == 'joint':

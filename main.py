@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
 from engine import Engine
-from laplace import LaplacePrior, VIPrior
+from laplace import LaplacePrior, VIPrior, GaussianPrior
 from models import RNN
 from regularisation import WeightDrop
 from utils import make_checkpoint, load_model, log_results, set_seed
@@ -339,8 +339,13 @@ def main():
 
     elif args.prior == 'ninf':
         log.info('Creating non-informative Gaussian prior')
-        # parameters['prior'] = GaussianPrior()
-        parameters['prior'] = 'ninf'
+        parameters['prior'] = GaussianPrior()
+        # parameters['prior'] = 'ninf'
+        
+        filename = path.join(args.checkpoint_dir,
+                             '{}_ninf{}.pth'.format(timestamp, '_with_apex' if use_apex else '',))
+        torch.save(make_checkpoint('ninf', **parameters), filename)
+        args.checkpoint = filename
     elif args.prior == 'vi':
         importance = 1e-5
     elif args.prior == 'hmc':

@@ -83,7 +83,7 @@ def multithread(function, args: list, max_active_processes: int = cpu_count() - 
         return [item[1] for item in sorted(return_list, key=lambda tup: tup[0])]
 
 
-def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
+def make_checkpoint(epoch: int, model: LSTM, criterion: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
                     optimizer: torch.optim.Optimizer, use_apex=False, amp=None, prior: Union[str, nn.Module] = None,
                     **kwargs):
     """
@@ -101,7 +101,7 @@ def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntr
         The current epoch of training
     model : LSTM
         The network model
-    loss_function : SplitCrossEntropyLoss or CrossEntropyLoss
+    criterion : SplitCrossEntropyLoss or CrossEntropyLoss
         The loss function
     optimizer : torch.optim.optimizer
         The optimizer function
@@ -122,7 +122,7 @@ def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntr
     checkpoint = {
         'epoch': epoch,
         'model': model.state_dict(),
-        'loss': loss_function.state_dict(),
+        'loss': criterion.state_dict(),
         'optimizer': optimizer.state_dict(),
     }
     if use_apex:
@@ -151,7 +151,7 @@ def save_model(filepath: str, data):
 
 
 def load_model(filepath: str, parameters: dict, model: LSTM, optimizer: torch.optim.Optimizer,
-               loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None,
+               criterion: Union[SplitCrossEntropyLoss, CrossEntropyLoss], amp=None,
                prior: Union[str, nn.Module] = None, **kwargs):
     """
     Load a checkpointed model into memory by reference
@@ -164,7 +164,7 @@ def load_model(filepath: str, parameters: dict, model: LSTM, optimizer: torch.op
         The model to load the checkpoint to
     optimizer : torch.optim.optimizer
         The optimizer to load the checkpoint to
-    loss_function : SplitCrossEntropyLoss or CrossEntropyLoss
+    criterion : SplitCrossEntropyLoss or CrossEntropyLoss
         The loss function to load the checkpoint to
     amp :
         The nvidia apex object to load AMP data to
@@ -180,7 +180,7 @@ def load_model(filepath: str, parameters: dict, model: LSTM, optimizer: torch.op
 
     model.load_state_dict(checkpoint['model'], strict=False)
     optimizer.load_state_dict(checkpoint['optimizer'])
-    loss_function.load_state_dict(checkpoint['loss'])
+    criterion.load_state_dict(checkpoint['loss'])
 
     if amp:
         if 'amp' not in checkpoint:

@@ -71,7 +71,7 @@ class Engine:
 
         with tqdm(dataloader, total=len(dataloader)) as pbar:
             for batch in pbar:
-                batch = tuple(t.to(self.device) for t in batch)
+                batch = tuple(t.squeeze(0).to(self.device) for t in batch)
                 data, targets, seq_len, lang = batch
 
                 hidden = self.model.init_hidden(batchsize=data.size(-1))
@@ -186,7 +186,7 @@ class Engine:
 
         with tqdm(dataloader, total=len(dataloader)) as pbar:
             for batch in pbar:
-                batch = tuple(t.to(self.device) for t in batch)
+                batch = tuple(t.squeeze(0).to(self.device) for t in batch)
                 data, targets, seq_len, lang = batch
 
                 if only_l and only_l != lang:
@@ -221,9 +221,8 @@ class Engine:
         self.model.train()
         i_batch = 0
         with tqdm(dataloader, total=len(dataloader)) as pbar:
-            for data, targets, seq_len, lang in pbar:
-
-                batch = tuple(t.to(self.device) for t in batch)
+            for batch in pbar:
+                batch = tuple(t.squeeze(0).to(self.device) for t in batch)
                 data, targets, seq_len, lang = batch
 
                 lr2 = self.optimizer.param_groups[0]['lr']
@@ -238,7 +237,7 @@ class Engine:
                     loss = self.criterion(output, targets)
 
                 if isinstance(prior, Prior) and not isinstance(prior, VIPrior):
-                    penalty = importance * prior.penalty(model)
+                    penalty = importance * prior.penalty(self.model)
                     loss += penalty
                 else:
                     penalty = 'N/A'

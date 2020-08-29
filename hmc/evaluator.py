@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from data import DataLoader
-from engine import evaluate
+from engine import Engine 
 
 import logging
 
@@ -10,17 +10,14 @@ log = logging.getLogger(__name__)
 
 
 class HMCEvaluator:
-    def __init__(self, num_burn: int, model: nn.Module, dataloader: DataLoader, criterion: torch.nn.modules.loss._Loss,
-                 device: str = 'cpu'):
+    def __init__(self, num_burn: int, dataloader: DataLoader):
         self.round_counter = 0
         self.sum_w_sample = 0.0
         self.w_sample = 1.0
 
         self.num_burn = num_burn
-        self.model = model
+        self.engine = engine
         self.dataloader = dataloader
-        self.criterion = criterion
-        self.device = device
 
         languages = dataloader.dataset.data.keys()
         self.average_log_likelihood = {l: 0 for l in languages}
@@ -30,11 +27,11 @@ class HMCEvaluator:
         self.round_counter = round_counter
         alpha = self.__get_alpha()
 
-        total_loss, avg_loss = evaluate(self.dataloader, self.model, self.criterion, device=self.device)
+        total_loss, avg_loss = self.engine.evaluate(self.dataloader)
         for language, loss in avg_loss.items():
             self.average_log_likelihood[language] *= (1 - alpha)
             self.average_log_likelihood[language] += alpha * loss
-            self.log_likelihoods[language].append(loss)
+            self.log_likelihoods[language].append((round_counter, loss))
 
         log.debug(f'Time step {round_counter} | LL: {total_loss}')
 
