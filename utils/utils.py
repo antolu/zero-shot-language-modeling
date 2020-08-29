@@ -1,13 +1,18 @@
+import logging
+import random
 from multiprocessing import Process, Manager, cpu_count
 from time import sleep
 from typing import Union
 
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, LSTM
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
+
+log = logging.getLogger(__name__)
 
 
 def multithread(function, args: list, max_active_processes: int = cpu_count() - 1) -> list:
@@ -79,7 +84,8 @@ def multithread(function, args: list, max_active_processes: int = cpu_count() - 
 
 
 def make_checkpoint(epoch: int, model: LSTM, loss_function: Union[SplitCrossEntropyLoss, CrossEntropyLoss],
-                    optimizer: torch.optim.Optimizer, use_apex=False, amp=None, prior: Union[str, nn.Module] = None, **kwargs):
+                    optimizer: torch.optim.Optimizer, use_apex=False, amp=None, prior: Union[str, nn.Module] = None,
+                    **kwargs):
     """
     Packages network parameters into a picklable dictionary containing keys
     * epoch: current epoch
@@ -188,7 +194,39 @@ def load_model(filepath: str, parameters: dict, model: LSTM, optimizer: torch.op
 
 
 def detach(data: Union[torch.Tensor, list]):
+    """
+    Utility function to detach tensors, or tuples of tensors, recursively.
+    Parameters
+    ----------
+    data : torch.Tensor or Tuple[torch.Tensor]
+        A tensor or an iterable that contains tensors or other iterables.
+
+    Returns
+    -------
+    torch.Tensor
+        A detached tensor.
+    Tuple[torch.Tensor]
+        A tuple of detached tensors.
+
+    """
     if isinstance(data, torch.Tensor):
         return data.detach()
     elif isinstance(data, tuple) or isinstance(data, list):
         return tuple(detach(d) for d in data)
+
+
+def set_seed(seed: int):
+    """
+    Utility function to set the seed for all used packages to enhance reproducibility
+    Parameters
+    ----------
+    seed : int
+        The seed to set.
+    """
+    log.info(f'Setting random seed to {seed} for reproducibility.')
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)

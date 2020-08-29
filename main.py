@@ -2,27 +2,25 @@
 
 import logging
 import math
-import random
+from bdb import BdbQuit
 from datetime import datetime
 from os import path
 from pprint import pformat
-import numpy as np
-from bdb import BdbQuit
 
 import torch
 import tqdm
-from torch.optim import Adam
 from torch.nn.modules import CrossEntropyLoss
+from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
-from laplace import GaussianPrior, LaplacePrior, VIPrior
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
-from engine import train, evaluate, refine
+from engine import Engine
+from laplace import LaplacePrior, VIPrior
 from models import RNN
-from utils.parser import get_args
-from utils import make_checkpoint, load_model
 from regularisation import WeightDrop
+from utils import make_checkpoint, load_model, log_results, set_seed
+from utils.parser import get_args
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
@@ -71,13 +69,7 @@ def main():
     log.info(f'Using time stamp {timestamp} to save models and logs.')
 
     if not args.no_seed:
-        log.info(f'Setting random seed to {args.seed} for reproducibility.')
-        torch.manual_seed(args.seed)
-        np.random.seed(args.seed)
-        random.seed(args.seed)
-
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(args.seed)
+        set_seed(args.seed)
 
     data = Corpus(args.datadir)
 
@@ -152,15 +144,15 @@ def main():
                     wdrop_layers=[0, 1, 2], tie_weights=True).to(device)
 
     if args.opt_level != 'O2' or not use_apex:  # Splitcross is not compatible with O2 optimization for amp
-        loss_function = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
+        criterion = SplitCrossEntropyLoss(args.emsize, splits=[]).to(device)
     else:
-        loss_function = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
+        criterion = CrossEntropyLoss().to(device)  # Should be ok to use with a vocabulary of this small size
 
     # Initialize optimizers, use FusedAdam if possible for speedup
     if use_apex:
         optimizer = optimizers.FusedAdam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     else:
-        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(loss_function.parameters())
+        params = list(filter(lambda p: p.requires_grad, model.parameters())) + list(criterion.parameters())
         optimizer = Adam(params, lr=args.lr, weight_decay=args.wdecay)
 
     if use_apex:
@@ -170,7 +162,7 @@ def main():
     parameters = {
         'model': model,
         'optimizer': optimizer,
-        'loss_function': loss_function,
+        'criterion': criterion,
         'use_apex': use_apex,
         'amp': amp if use_apex else None,
         'clip': args.clip,
@@ -212,35 +204,18 @@ def main():
                 elif rnn.zoneout > 0:
                     rnn.zoneout = args.wdrop
 
-    # Add backward hook for gradient clipping
-    if args.clip:
-        if use_apex:
-            for p in amp.master_params(optimizer):
-                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
-        else:
-            for p in model.parameters():
-                p.register_hook(lambda grad: torch.clamp(grad, -args.clip, args.clip))
-
     saved_models = list()
     result_str = '| Language {} | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'
+
+    engine = Engine(**parameters, n_samples=args.n_samples, scaling=args.scaling, tb_writer=tb_writer)
 
     def test():
         log.info('=' * 89)
         log.info('Running test set (zero-shot results)...')
-        test_loss, avg_loss = evaluate(test_loader, **parameters)
+        test_loss, avg_loss = engine.evaluate(test_loader)
         log.info('Test set finished | test loss {} | test bpc {}'.format(test_loss, test_loss / math.log(2)))
 
-        tb_str = ''
-        for lang, avg_l_loss in avg_loss.items():
-            langstr = dictionary.idx2lang[lang]
-            result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
-            log.info(result)
-            tb_str += result + '  \n'
-
-            tb_writer.add_text('zero-shot results', tb_str)
-            tb_writer.flush()
-
-        log.info('=' * 89)
+        log_results('Final zero-shot results', avg_loss, dictionary.idx2lang, tb_writer=tb_writer)
 
     if args.train:
         f = 1.
@@ -271,12 +246,10 @@ def main():
             pbar = tqdm.trange(start_epoch, args.no_epochs + 1, position=1, dynamic_ncols=True)
             for epoch in pbar:
 
-                steps = train(train_loader, lr_weights=data_spec_lrweights, **parameters,
-                              total_steps=total_steps, steps=steps,
-                              scaling=args.scaling, n_samples=args.n_samples, tb_writer=tb_writer,
-                              debug=args.debug, debug_streams=debug_streams)
+                engine.train(train_loader, lr_weights=data_spec_lrweights, total_steps=total_steps,
+                             debug=args.debug, debug_streams=debug_streams)
 
-                val_loss, _ = evaluate(val_loader, **parameters)
+                val_loss, _ = engine.evaluate(val_loader)
                 pbar.set_description('Epoch {} | Val loss {}'.format(epoch, val_loss))
                 log.info('End of epoch {} | Validation loss {}'.format(epoch, val_loss))
 
@@ -286,7 +259,7 @@ def main():
 
                 filename = path.join(args.checkpoint_dir,
                                      '{}_epoch{}{}_{}.pth'.format(timestamp, epoch, '_with_apex' if use_apex else '',
-                                     args.prior))
+                                                                  args.prior))
                 torch.save(make_checkpoint(epoch + 1, **parameters), filename)
                 saved_models.append(filename)
 
@@ -318,9 +291,6 @@ def main():
         except (KeyboardInterrupt, BdbQuit):
             log.info('Registered KeyboardInterrupt. Stopping training.')
             log.info('Saving last model to disk')
-
-            if args.prior == 'vi':
-                sample_weights_hook.remove()
 
             stop = True
         finally:
@@ -357,14 +327,14 @@ def main():
             laplace_set = Dataset(data_splits['train'], batchsize=args.batchsize, bptt=100, reset_on_iter=True)
             laplace_loader = DataLoader(laplace_set, num_workers=args.workers)
             log.info('Creating Laplacian prior')
-            prior = LaplacePrior(model, loss_function, laplace_loader, use_apex=use_apex, amp=amp,
-                                               device=device)
+            prior = LaplacePrior(model, criterion, laplace_loader, use_apex=use_apex, amp=amp,
+                                 device=device)
             parameters['prior'] = prior
 
             torch.save(make_checkpoint('fisher_matrix', **parameters),
                        path.join(args.checkpoint_dir,
                                  '{}_fishers_matrix{}_{}.pth'.format(timestamp, '_with_apex' if use_apex else '',
-                                                              args.prior)))
+                                                                     args.prior)))
         importance = 1e5
 
     elif args.prior == 'ninf':
@@ -417,11 +387,10 @@ def main():
 
                 log.info(f'Refining for language {dictionary.idx2lang[lang]}')
                 for epoch in range(1, args.refine_epochs + 1):
-                    refine(refine_dataloader, **parameters, importance=importance)
+                    engine.refine(refine_dataloader, **parameters, importance=importance)
                     if epoch % 5 == 0 and not args.fast:
                         final_loss = True
-                        loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
-                                                  device=device)
+                        loss, avg_loss = engine.evaluate(test_sets[lang], only_l=lang)
 
                         for lang, avg_l_loss in avg_loss.items():
                             langstr = dictionary.idx2lang[lang]
@@ -429,8 +398,7 @@ def main():
                                 result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2)))
 
                 if not final_loss:
-                    loss, avg_loss = evaluate(test_sets[lang], model, loss_function, only_l=lang, report_all=True,
-                                              device=device)
+                    loss, avg_loss = engine.evaluate(test_sets[lang], only_l=lang)
 
                 for lang, avg_l_loss in avg_loss.items():
                     langstr = dictionary.idx2lang[lang]
@@ -440,19 +408,7 @@ def main():
         except KeyboardInterrupt:
             log.error('Refine process stopped. Printing available results.')
         finally:
-            log.info('=' * 89)
-            log.info('FINAL FEW SHOT RESULTS: ')
-            log.info('=' * 89)
-            tb_str = ''
-            for lang, avg_l_loss in results.items():
-                langstr = dictionary.idx2lang[lang]
-                result = result_str.format(langstr, avg_l_loss, math.exp(avg_l_loss), avg_l_loss / math.log(2))
-                log.info(result)
-                tb_str += result + '  \n'
-            log.info('=' * 89)
-
-            tb_writer.add_text('few-shot results', tb_str)
-            tb_writer.flush()
+            log_results('Final few-shot results', results, dictionary.idx2lang, tb_writer=tb_writer)
 
 
 if __name__ == "__main__":
@@ -460,4 +416,3 @@ if __name__ == "__main__":
         main()
     except Exception:
         log.exception('Got exception from main process')
-
