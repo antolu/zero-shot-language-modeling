@@ -14,7 +14,7 @@ from tqdm import tqdm
 import numpy as np
 
 from criterion import SplitCrossEntropyLoss
-from laplace import Prior
+from priors import Prior
 from regularisation import LockedDropout, WeightDrop
 
 log = logging.getLogger(__name__)

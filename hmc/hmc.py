@@ -9,7 +9,7 @@ from criterion import SplitCrossEntropyLoss
 from data import DataLoader
 from .evaluator import HMCEvaluator
 from utils import detach
-from laplace.laplaceprior import _diag_fisher as fisher
+from priors.laplaceprior import _diag_fisher as fisher
 import logging
 
 log = logging.getLogger(__name__)
