@@ -16,8 +16,8 @@ from torch.utils.tensorboard import SummaryWriter
 from criterion import SplitCrossEntropyLoss
 from data import get_sampling_probabilities, Dataset, Corpus, DataLoader
 from engine import Engine
-from laplace import LaplacePrior, VIPrior, GaussianPrior
 from models import RNN
+from priors import LaplacePrior, VIPrior, GaussianPrior, IsotropicGaussianPrior
 from regularisation import WeightDrop
 from utils import make_checkpoint, load_model, log_results, set_seed
 from utils.parser import get_args
@@ -349,9 +349,9 @@ def main():
         log.info('Creating non-informative Gaussian prior')
         parameters['prior'] = GaussianPrior()
         # parameters['prior'] = 'ninf'
-        
+
         filename = path.join(args.checkpoint_dir,
-                             '{}_ninf{}.pth'.format(timestamp, '_with_apex' if use_apex else '',))
+                             '{}_ninf{}.pth'.format(timestamp, '_with_apex' if use_apex else '', ))
         torch.save(make_checkpoint('ninf', **parameters), filename)
         args.checkpoint = filename
     elif args.prior == 'vi':
@@ -361,6 +361,9 @@ def main():
     elif args.prior == 'none':
         log.info('Using no prior to provide penalty term during transfer learning')
         parameters['prior'] = 'none'
+    elif args.prior == 'isotropic':
+        parameters['prior'] = IsotropicGaussianPrior(model)
+        importance = 1e5
     else:
         raise ValueError(f'Passed prior {args.prior} is not an implemented inference technique.')
 

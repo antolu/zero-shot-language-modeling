@@ -2,7 +2,7 @@ from typing import Union
 
 import torch
 
-from laplace.prior import Prior
+from .prior import Prior
 
 
 class GaussianPrior(Prior):

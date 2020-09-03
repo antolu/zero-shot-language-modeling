@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument('--test', action='store_true', help='Test the model')
     parser.add_argument('--refine', action='store_true', help='Refine the model using laplacian approximation')
 
-    parser.add_argument('--prior', choices=['ninf', 'laplace', 'vi', 'hmc', 'none'], default='ninf',
+    parser.add_argument('--prior', choices=['ninf', 'laplace', 'vi', 'hmc', 'none', 'isotropic'], default='ninf',
                         help='Which technique to use for inference of the universal prior')
     parser.add_argument('--lang-sampling-probs', dest='lang_sampling_probs', type=float, default=1.0,
                         help='Take the probability of sampling each language to the power of this value. A value smaller'

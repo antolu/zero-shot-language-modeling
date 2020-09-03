@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from criterion import SplitCrossEntropyLoss
-from laplace import Prior, VIPrior
+from priors import Prior, VIPrior
 from models.rnn import RNN
 from utils import detach
 
