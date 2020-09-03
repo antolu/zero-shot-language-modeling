@@ -158,7 +158,7 @@ class Engine:
                 # reset lr to optimiser default
                 self.optimizer.param_groups[0]['lr'] = lr2
 
-                if i_batch % self.log_interval == 0 and batch > 0:
+                if i_batch % self.log_interval == 0 and i_batch > 0:
                     cur_loss = total_loss.item() / self.log_interval
                     elapsed = time.time() - start_time
                     log.debug(

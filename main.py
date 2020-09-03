@@ -23,30 +23,33 @@ from utils import make_checkpoint, load_model, log_results, set_seed
 from utils.parser import get_args
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-
 LOG_DIR = 'logs'
-writer_dir = path.join(LOG_DIR, f'zerolm_{timestamp}')
-tb_writer = SummaryWriter(writer_dir)
-
-log = logging.getLogger()
-log.setLevel(logging.DEBUG)
-
-fh = logging.FileHandler(path.join(writer_dir, 'log.log'))
-fh.setLevel(logging.DEBUG)
-
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
-fh.setFormatter(formatter)
-ch.setFormatter(formatter)
-
-log.addHandler(fh)
-log.addHandler(ch)
 
 
 def main():
     args = get_args()
+
+    writer_dir = path.join(LOG_DIR, f'zerolm_{timestamp}')
+    if args.job_name != '':
+        writer_dir += '_' + args.job_name
+    tb_writer = SummaryWriter(writer_dir)
+
+    log = logging.getLogger()
+    log.setLevel(logging.DEBUG)
+
+    fh = logging.FileHandler(path.join(writer_dir, 'log.log'))
+    fh.setLevel(logging.DEBUG)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+
+    formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(name)s - %(message)s', "%Y-%m-%d %H:%M:%S")
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+
+    log.addHandler(fh)
+    log.addHandler(ch)
+
 
     log.info(f'Parsed arguments: \n{pformat(args.__dict__)}')
     assert args.cond_type.lower() in ['none', 'platanios', 'oestling']
@@ -218,6 +221,11 @@ def main():
         log_results('Final zero-shot results', avg_loss, dictionary.idx2lang, tb_writer=tb_writer)
 
     if args.train:
+        if args.prior == 'ninf':
+            raise UserWarning('The prior ninf is intended to be used without'
+                    'pretraining on source languages. Omit the program flag'
+                    '--train to continue')
+
         f = 1.
         stored_loss = 1e32
         epochs_no_improve = 0
@@ -350,6 +358,9 @@ def main():
         importance = 1e-5
     elif args.prior == 'hmc':
         raise NotImplementedError
+    elif args.prior == 'none':
+        log.info('Using no prior to provide penalty term during transfer learning')
+        parameters['prior'] = 'none'
     else:
         raise ValueError(f'Passed prior {args.prior} is not an implemented inference technique.')
 
